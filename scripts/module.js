@@ -20,6 +20,20 @@ class CustSidebarDirectory extends SidebarTab {
     // Record the directory as an application of the collection if it is not a popout
     if ( !this.options.popOut ) this.constructor.collection.apps.push(this);
   }
+  
+  haveControlPerms(){
+    return game.user.role >= game.settings.get("music-permissions", "playback-perm");
+  }
+  
+  haveEditPerms(){
+	return game.user.role >= game.settings.get("music-permissions", "edit-perm");
+  }
+  
+  haveCreatePerms(){
+	return game.user.role >= game.settings.get("music-permissions", "create-perm");
+  }
+  
+  
 
 	/* -------------------------------------------- */
 
@@ -101,7 +115,7 @@ class CustSidebarDirectory extends SidebarTab {
    * @return {Object}                 A tree structure containing the folders and documents
    */
   static setupFolders(folders, documents) {
-    documents = documents.filter(d => true);
+    documents = documents.filter(d => d.permission > 0);
     const depths = [];
     const handled = new Set();
 
@@ -226,7 +240,7 @@ class CustSidebarDirectory extends SidebarTab {
     return {
       user: game.user,
       tree: this.tree,
-      canCreate: cls.canUserCreate(game.user),
+      canCreate: this.haveCreatePerms(),
       documentCls: cls.documentName.toLowerCase(),
       tabName: cls.metadata.collection,
       sidebarIcon: cfg.sidebarIcon,
@@ -323,7 +337,7 @@ class CustSidebarDirectory extends SidebarTab {
     html.find('.create-document').click(ev => this._onCreateDocument(ev));
     html.find('.collapse-all').click(this.collapseAll.bind(this));
     html.find(".folder .folder .folder .create-folder").remove(); // Prevent excessive folder nesting
-    if ( game.user.isGM || true ) html.find('.create-folder').click(ev => this._onCreateFolder(ev));
+    if ( this.haveCreatePerms() ) html.find('.create-folder').click(ev => this._onCreateFolder(ev));
 
 	  // Entry-level events
     directory.on("click", ".document-name", this._onClickDocumentName.bind(this));
@@ -762,7 +776,7 @@ class CustSidebarDirectory extends SidebarTab {
       {
         name: "SIDEBAR.Duplicate",
         icon: '<i class="far fa-copy"></i>',
-        condition: () => game.user.isGM,
+        condition: () => this.haveEditPerms(),
         callback: li => {
           const original = this.constructor.collection.get(li.data("documentId"));
           return original.clone({name: `${original.name} (Copy)`}, {save: true});
@@ -955,7 +969,6 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
    * @private
    */
   _preparePlaylistData(playlist) {
-    const isGM = true;
     if ( playlist.playing ) this._playingPlaylists.push(playlist);
 
     // Playlist configuration
@@ -965,18 +978,18 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
     p.disabled = p.mode === CONST.PLAYLIST_MODES.DISABLED;
     p.expanded = this._expanded.has(p._id);
     p.css = [p.expanded ? "" : "collapsed", playlist.playing ? "playing" : ""].filterJoin(" ")
-    p.controlCSS = (isGM && !p.disabled) ? "" : "disabled";
+    p.controlCSS = (this.haveControlPerms() && (playlist.permission > 2) && !p.disabled) ? "" : "disabled";
 
     // Playlist sounds
     const sounds = [];
     for ( let sound of playlist.sounds ) {
-      if ( !isGM && !sound.playing ) continue;
+      if ( !(playlist.permission > 1) && !sound.playing ) continue;
 
       // All sounds
       const s = sound.data.toObject(false);
       s.playlistId = playlist.id;
       s.css = s.playing ? "playing" : "";
-      s.controlCSS = isGM ? "" : "disabled";
+      s.controlCSS = (this.haveControlPerms() && playlist.permission > 2) ? "" : "disabled";
       s.playIcon = this._getPlayIcon(sound);
       s.playTitle = s.pausedTime ? "PLAYLIST.SoundResume" : "PLAYLIST.SoundPlay";
 
@@ -1061,29 +1074,39 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 
   /** @override */
   activateListeners(html) {
-    if(!game.user.isGM && (game.user.isGM || true)){
-	  html.find('.sound-controls').each(function(num, div){
-        if(div.className.includes("playlist-controls")) return;
-		const li = div.closest(".sound")
-		const playlist = game.playlists.get(li.dataset.playlistId);
-		const sound = playlist.sounds.get(li.dataset.soundId);
-		
-		div.innerHTML = `
-		        <a class="sound-control ` + (sound.data?.repeat ? " " : " inactive ") + (sound.controlCSS ?? "") + `"
-                    data-action="sound-repeat" title="` + game.i18n.localize('PLAYLIST.SoundLoop') + `">
-                    <i class="fas fa-sync"></i>
-                </a>` + div.innerHTML;
-	  });
-	  html.find('.playlist-controls').each(function(num, div){
-		 if(!div.className.includes("playlist-controls")) return;
-		 div.innerHTML = div.innerHTML.replace("disabled", "")
-		 if(!div.innerHTML.includes("playlist-stop")){
+    if(!game.user.isGM){ //Already there for GMs
+	  if(this.haveControlPerms()){
+		  html.find('.sound-controls').each(function(num, div){
+			if(div.className.includes("playlist-controls")) return;
+			const li = div.closest(".sound")
+			const playlist = game.playlists.get(li.dataset.playlistId);
+			const sound = playlist.sounds.get(li.dataset.soundId);
+			
 			div.innerHTML = `
-			<a class="sound-control" data-action="sound-create" title="` + game.i18n.localize('PLAYLIST.SoundCreate') + `">
-                <i class="fas fa-plus"></i>
-            </a>` + div.innerHTML;
-		 }
-	  });
+					<a class="sound-control ` + (sound.data?.repeat ? " " : " inactive ") + ((playlist.permission > 2) ? "" : "disabled") + `"
+						data-action="sound-repeat" title="` + game.i18n.localize('PLAYLIST.SoundLoop') + `">
+						<i class="fas fa-sync"></i>
+					</a>` + div.innerHTML;
+		  });
+	  }
+	  
+	  if(this.haveEditPerms()){
+		  html.find('.playlist-controls').each(function(num, div){
+			 const li = div.closest(".playlist-header")
+			 const playlist = game.playlists.get(li.dataset.documentId);
+			 
+			 if(!div.innerHTML.includes("playlist-stop")){
+				div.innerHTML = `
+				<a class="sound-control disabled" data-action="sound-create" title="` + game.i18n.localize('PLAYLIST.SoundCreate') + `">
+					<i class="fas fa-plus"></i>
+				</a>` + div.innerHTML;
+			 }
+			 
+			 if(playlist.permission > 2){
+				div.innerHTML = div.innerHTML.replaceAll("disabled", "")
+			 }
+		  });
+	  }
 	}
 	super.activateListeners(html);
 
@@ -1474,7 +1497,6 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   /** @inheritdoc */
   _getFolderContextOptions() {
     const options = super._getFolderContextOptions();
-    options.findSplice(o => o.name === "PERMISSION.Configure");
     return options;
   }
 
@@ -1483,7 +1505,6 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   /** @inheritdoc */
   _getEntryContextOptions() {
     const options = super._getEntryContextOptions();
-    options.findSplice(o => o.name === "PERMISSION.Configure");
     options.unshift({
       name: "PLAYLIST.Edit",
       icon: '<i class="fas fa-edit"></i>',
@@ -1598,10 +1619,9 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 
 
 
-
-Hooks.once("ready", async function () {
+Hooks.once("ready", async function () {	
 	game.settings.register("music-permissions", "playback-perm",{
-		name: "Minimum role to control music playback",
+		name: "Playback: ",
 		hint: "Users of this role will see the songs they have permission to and play any of those songs. They will be able to stop any songs playing",
 		scope: "world",
 		config: true,
@@ -1613,12 +1633,12 @@ Hooks.once("ready", async function () {
 		},
 		default: "3",
 		onChange: value => {
-			ui["playlist"].render(true);
+			ui["playlists"].render(true);
 		}
 	});
 
 	game.settings.register("music-permissions", "edit-perm",{
-		name: "Minimum role to edit playlists and upload songs",
+		name: "Edit playlists: ",
 		hint: "Users of this role and above will be able to configure playlists they have ownership of and upload songs to any of them.",
 		scope: "world",
 		config: true,
@@ -1630,12 +1650,12 @@ Hooks.once("ready", async function () {
 		},
 		default: "3",
 		onChange: value => {
-			ui["playlist"].render(true);
+			ui["playlists"].render(true);
 		}
 	});
 
 	game.settings.register("music-permissions", "create-perm",{
-		name: "Minimum role to create new playlists",
+		name: "Create playlists:",
 		hint: "Warning, enabling this setting requires editing server files. See GitHub for info.",
 		scope: "world",
 		config: true,
@@ -1647,10 +1667,14 @@ Hooks.once("ready", async function () {
 		},
 		default: "3",
 		onChange: value => {
-			ui["playlist"].render(true);
+			ui["playlists"].render(true);
 		}
 	});
 
 	ui['playlists'] = new CustPlaylistDirectory()
 	ui['playlists'].render(true)
+});
+
+Hooks.on("updatePlaylist", function(playlist, change, info, id){
+	if('permission' in change) ui["playlists"].render(true);
 });
