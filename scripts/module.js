@@ -1,3 +1,97 @@
+function sendRemoteRequest(data){
+	data.user = game.userId;
+	
+	let worker = null;
+	game.users.forEach( (user) => {
+		if(user.isGM && user.active && worker == null) worker = user.id
+	});
+	if(worker == null){
+		throw new Error("A Game Master must be active for this action, sorry!");
+		return;
+	}
+	
+	data.worker = worker;
+	
+	game.socket.emit("module.music-permissions", data);
+}
+
+class RemoteFolderConfig extends DocumentSheet {	
+
+  constructor(object = {}, options = {}){
+	options.editable = true;
+    super(object, options)
+	this.options.viewPermission = "NONE"
+	this.options.editable = true;
+  }
+  
+  get isEditable() {
+	  return true;
+  }
+  
+	  /** @inheritdoc */
+  static get defaultOptions() {
+    return foundry.utils.mergeObject(super.defaultOptions, {
+      classes: ["sheet", "folder-edit"],
+      template: "templates/sidebar/folder-edit.html",
+	  width: 360
+    });
+  }
+
+  /* -------------------------------------------- */
+
+  /** @override */
+  get id() {
+    return this.object.id ? `folder-edit-${this.object.id}` : "folder-create";
+  }
+
+  /* -------------------------------------------- */
+
+  /** @override */
+  get title() {
+    if ( this.object.id ) return `${game.i18n.localize("FOLDER.Update")}: ${this.object.name}`;
+    return game.i18n.localize("FOLDER.Create");
+  }
+
+  /* -------------------------------------------- */
+
+  /** @override */
+  async getData(options) {
+    return {
+      name: this.object.id ? this.object.name : "",
+      newName: game.i18n.format("DOCUMENT.New", {type: game.i18n.localize(Folder.metadata.label)}),
+      folder: this.object.data,
+      safeColor: this.object.data.color ?? "#000000",
+      sortingModes: {"a": "FOLDER.SortAlphabetical", "m": "FOLDER.SortManual"},
+      submitText: game.i18n.localize(this.object.id ? "FOLDER.Update" : "FOLDER.Create")
+    }
+  }
+
+  /* -------------------------------------------- */
+
+  /** @override */
+  async _updateObject(event, formData) {
+    if ( !formData.parent ) formData.parent = null;
+    if ( !this.object.id ) {
+      this.object.data.update(formData);
+	  //Folder.create(this.object.data);
+	  sendRemoteRequest({
+		 action: "folder-create",
+		 data: this.object.data
+	  });
+      return true;
+    }
+	console.log("Sending edit request!");
+	console.log(this.object)
+    sendRemoteRequest({
+		action: "folder-edit",
+		target: this.object.id,
+		data: formData
+	});
+	//return this.object.update(formData);
+	return true;
+  }
+}
+
 class CustSidebarDirectory extends SidebarTab {
   constructor(options) {
     super(options);
@@ -21,16 +115,19 @@ class CustSidebarDirectory extends SidebarTab {
     if ( !this.options.popOut ) this.constructor.collection.apps.push(this);
   }
   
-  haveControlPerms(){
-    return game.user.role >= game.settings.get("music-permissions", "playback-perm");
+  static haveControlPerms(userId = game.userId){
+	let user = game.users.get(userId);
+    return user.role >= game.settings.get("music-permissions", "playback-perm");
   }
   
-  haveEditPerms(){
-	return game.user.role >= game.settings.get("music-permissions", "edit-perm");
+  static haveEditPerms(userId = game.userId){
+	let user = game.users.get(userId);
+	return user.role >= game.settings.get("music-permissions", "edit-perm");
   }
   
-  haveCreatePerms(){
-	return game.user.role >= game.settings.get("music-permissions", "create-perm");
+  static haveCreatePerms(userId = game.userId){
+	let user = game.users.get(userId);
+	return user.role >= game.settings.get("music-permissions", "create-perm");
   }
   
   
@@ -153,8 +250,10 @@ class CustSidebarDirectory extends SidebarTab {
     // Filter folder visibility
     for ( let i = CONST.FOLDER_MAX_DEPTH - 1; i >= 0; i-- ) {
       depths[i] = depths[i].reduce((arr, f) => {
-        f.children = f.children.filter(c => c.displayed);
-        if ( !f.displayed ) return arr;
+        f.children = f.children.filter(c => {
+			return c.displayed || c.data?.description == game.userId
+		});
+        if ( !f.displayed && f.data.description != game.userId) return arr;
         f.depth = i+1;
         arr.push(f);
         return arr;
@@ -240,7 +339,7 @@ class CustSidebarDirectory extends SidebarTab {
     return {
       user: game.user,
       tree: this.tree,
-      canCreate: this.haveCreatePerms(),
+      canCreate: CustSidebarDirectory.haveCreatePerms(),
       documentCls: cls.documentName.toLowerCase(),
       tabName: cls.metadata.collection,
       sidebarIcon: cfg.sidebarIcon,
@@ -337,7 +436,7 @@ class CustSidebarDirectory extends SidebarTab {
     html.find('.create-document').click(ev => this._onCreateDocument(ev));
     html.find('.collapse-all').click(this.collapseAll.bind(this));
     html.find(".folder .folder .folder .create-folder").remove(); // Prevent excessive folder nesting
-    if ( this.haveCreatePerms() ) html.find('.create-folder').click(ev => this._onCreateFolder(ev));
+    if ( CustSidebarDirectory.haveCreatePerms() ) html.find('.create-folder').click(ev => this._onCreateFolder(ev));
 
 	  // Entry-level events
     directory.on("click", ".document-name", this._onClickDocumentName.bind(this));
@@ -385,11 +484,51 @@ class CustSidebarDirectory extends SidebarTab {
   async _onCreateDocument(event) {
     event.preventDefault();
     event.stopPropagation();
+	
     const button = event.currentTarget;
     const data = {folder: button.dataset.folder};
     const options = {width: 320, left: window.innerWidth - 630, top: button.offsetTop };
-	  const cls = getDocumentClass(this.constructor.documentName);
-    return cls.createDialog(data, options);
+    //return Playlist.createDialog(data, options);
+	
+	const documentName = "Playlist";
+    const types = game.system.documentTypes[documentName];
+    const folders = game.folders.filter(f => (f.data.type === documentName) && f.displayed);
+    const label = game.i18n.localize(Playlist.metadata.label);
+    const title = game.i18n.format("DOCUMENT.Create", {type: label});
+
+    // Render the document creation form
+    const html = await renderTemplate(`templates/sidebar/document-create.html`, {
+      name: data.name || game.i18n.format("DOCUMENT.New", {type: label}),
+      folder: data.folder,
+      folders: folders,
+      hasFolders: folders.length >= 1,
+      type: data.type || types[0],
+      types: types.reduce((obj, t) => {
+        const label = CONFIG[documentName]?.typeLabels?.[t] ?? t;
+        obj[t] = game.i18n.has(label) ? game.i18n.localize(label) : t;
+        return obj;
+      }, {}),
+      hasTypes: types.length > 1
+    });
+
+    // Render the confirmation dialog window
+    return Dialog.prompt({
+      title: title,
+      content: html,
+      label: title,
+      callback: html => {
+        const form = html[0].querySelector("form");
+        const fd = new FormDataExtended(form);
+        foundry.utils.mergeObject(data, fd.toObject(), {inplace: true});
+        if ( !data.folder ) delete data["folder"];
+        if ( types.length === 1 ) data.type = types[0];
+		
+		if(game.user.isGM) return Playlist.create(data, {renderSheet: true});
+		else return sendRemoteRequest({"action": "playlist-create", "data": data});
+      },
+      rejectClose: false,
+      options: options
+    });
   }
 
 	/* -------------------------------------------- */
@@ -405,8 +544,28 @@ class CustSidebarDirectory extends SidebarTab {
 	  const button = event.currentTarget;
     const parent = button.dataset.parentFolder;
     const data = {parent: parent ? parent : null, type: this.constructor.documentName};
-    const options = {top: button.offsetTop, left: window.innerWidth - 310 - FolderConfig.defaultOptions.width};
-	  Folder.createDialog(data, options);
+	
+	const options = {
+		top: button.offsetTop, 
+		left: window.innerWidth - 310 - FolderConfig.defaultOptions.width,
+	};
+	  
+	  
+	  
+	  if(game.user.isGM){
+		Folder.createDialog(data, options);
+	  } else {
+		const label = game.i18n.localize(Folder.metadata.label);
+		const folderData = foundry.utils.mergeObject({
+		  name: game.i18n.format("DOCUMENT.New", {type: label}),
+		  sorting: "a",
+		}, data);
+		const folder = new Folder(folderData);
+		folder.data.permission = {};
+		folder.data.permission[game.userId] = CONST.DOCUMENT_PERMISSION_LEVELS.OWNER;
+		return new RemoteFolderConfig(folder, options).render(true);
+	  }
+	  
   }
 
   /* -------------------------------------------- */
@@ -522,7 +681,7 @@ class CustSidebarDirectory extends SidebarTab {
    * @protected
    */
   async _handleDroppedDocument(target, data) {
-
+	
     // Determine the closest folder ID
     const closestFolder = target ? target.closest(".folder") : null;
     if ( closestFolder ) closestFolder.classList.remove("droptarget");
@@ -638,12 +797,19 @@ class CustSidebarDirectory extends SidebarTab {
       {
         name: "FOLDER.Edit",
         icon: '<i class="fas fa-edit"></i>',
-        condition: game.user.isGM,
+        condition: (header) => {
+			const folder = game.folders.get(header.parent().data("folderId"))
+			return CustSidebarDirectory.haveEditPerms() && (game.user.isGM || folder.data.description == game.userId)
+		},
         callback: header => {
           const li = header.parent()[0];
           const folder = game.folders.get(li.dataset.folderId);
           const options = {top: li.offsetTop, left: window.innerWidth - 310 - FolderConfig.defaultOptions.width};
-          new FolderConfig(folder, options).render(true);
+          if(game.user.isGM){
+			  new FolderConfig(folder, options).render(true);
+		  } else {
+			  new RemoteFolderConfig(folder, options).render(true);
+		  }
         }
       },
       {
@@ -701,14 +867,20 @@ class CustSidebarDirectory extends SidebarTab {
       {
         name: "FOLDER.Remove",
         icon: '<i class="fas fa-trash"></i>',
-        condition: game.user.isGM,
+        condition:  (header) => {
+			const folder = game.folders.get(header.parent().data("folderId"))
+			return CustSidebarDirectory.haveEditPerms() && (game.user.isGM || folder.data.description == game.userId)
+		},
         callback: header => {
           const li = header.parent();
           const folder = game.folders.get(li.data("folderId"));
           return Dialog.confirm({
             title: `${game.i18n.localize("FOLDER.Remove")} ${folder.name}`,
             content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.localize("FOLDER.RemoveWarning")}</p>`,
-            yes: () => folder.delete({deleteSubfolders: false, deleteContents: false}),
+            yes: () => {
+				if(game.user.isGM) folder.delete({deleteSubfolders: false, deleteContents: false})
+				else sendRemoteRequest({"action":"folder-remove", "target":folder.id});
+			},
             options: {
               top: Math.min(li[0].offsetTop, window.innerHeight - 350),
               left: window.innerWidth - 720,
@@ -720,14 +892,18 @@ class CustSidebarDirectory extends SidebarTab {
       {
         name: "FOLDER.Delete",
         icon: '<i class="fas fa-dumpster"></i>',
-        condition: game.user.isGM,
+        condition: (header) => {
+			return game.user.isGM
+		},
         callback: header => {
           const li = header.parent();
           const folder = game.folders.get(li.data("folderId"));
           return Dialog.confirm({
             title: `${game.i18n.localize("FOLDER.Delete")} ${folder.name}`,
             content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.localize("FOLDER.DeleteWarning")}</p>`,
-            yes: () => folder.delete({deleteSubfolders: true, deleteContents: true}),
+            yes: () => {
+				folder.delete({deleteSubfolders: true, deleteContents: true})
+			},
             options: {
               top: Math.min(li[0].offsetTop, window.innerHeight - 350),
               left: window.innerWidth - 720,
@@ -763,7 +939,10 @@ class CustSidebarDirectory extends SidebarTab {
       {
         name: "SIDEBAR.Delete",
         icon: '<i class="fas fa-trash"></i>',
-        condition: () => game.user.isGM,
+        condition: (li) => {
+			const document = this.constructor.collection.get(li.data("documentId"))
+			return document && document.permission > 2 && CustSidebarDirectory.haveEditPerms()
+		},
         callback: li => {
           const document = this.constructor.collection.get(li.data("documentId"));
           if ( !document ) return;
@@ -776,7 +955,7 @@ class CustSidebarDirectory extends SidebarTab {
       {
         name: "SIDEBAR.Duplicate",
         icon: '<i class="far fa-copy"></i>',
-        condition: () => this.haveEditPerms(),
+        condition: () => CustSidebarDirectory.haveCreatePerms(),
         callback: li => {
           const original = this.constructor.collection.get(li.data("documentId"));
           return original.clone({name: `${original.name} (Copy)`}, {save: true});
@@ -978,7 +1157,7 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
     p.disabled = p.mode === CONST.PLAYLIST_MODES.DISABLED;
     p.expanded = this._expanded.has(p._id);
     p.css = [p.expanded ? "" : "collapsed", playlist.playing ? "playing" : ""].filterJoin(" ")
-    p.controlCSS = (this.haveControlPerms() && (playlist.permission > 2) && !p.disabled) ? "" : "disabled";
+    p.controlCSS = (CustSidebarDirectory.haveControlPerms() && (playlist.permission > 2) && !p.disabled) ? "" : "disabled";
 
     // Playlist sounds
     const sounds = [];
@@ -989,7 +1168,7 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
       const s = sound.data.toObject(false);
       s.playlistId = playlist.id;
       s.css = s.playing ? "playing" : "";
-      s.controlCSS = (this.haveControlPerms() && playlist.permission > 2) ? "" : "disabled";
+      s.controlCSS = (CustSidebarDirectory.haveControlPerms() && playlist.permission > 2) ? "" : "disabled";
       s.playIcon = this._getPlayIcon(sound);
       s.playTitle = s.pausedTime ? "PLAYLIST.SoundResume" : "PLAYLIST.SoundPlay";
 
@@ -1075,7 +1254,7 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   /** @override */
   activateListeners(html) {
     if(!game.user.isGM){ //Already there for GMs
-	  if(this.haveControlPerms()){
+	  if(CustSidebarDirectory.haveControlPerms()){
 		  html.find('.sound-controls').each(function(num, div){
 			if(div.className.includes("playlist-controls")) return;
 			const li = div.closest(".sound")
@@ -1090,7 +1269,7 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 		  });
 	  }
 	  
-	  if(this.haveEditPerms()){
+	  if(CustSidebarDirectory.haveEditPerms()){
 		  html.find('.playlist-controls').each(function(num, div){
 			 const li = div.closest(".playlist-header")
 			 const playlist = game.playlists.get(li.dataset.documentId);
@@ -1105,6 +1284,19 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 			 if(playlist.permission > 2){
 				div.innerHTML = div.innerHTML.replaceAll("disabled", "")
 			 }
+		  });
+	  }
+	  
+	  if(CustSidebarDirectory.haveCreatePerms()){
+		  html.find('.folder-header').each(function(num, div){
+			  const li = div.closest(".directory-item")
+			  if(!li) return;
+			  let folderId = li.dataset.folderId;
+			  
+			  div.innerHTML += `<a class="create-folder" data-parent-folder="` + folderId + 
+			                   `"><i class="fas fa-folder-plus fa-fw"></i></a>
+                                <a class="create-document" data-folder="` + folderId + 
+							   `"><i class="fas fa-user-plus fa-fw"></i></a>`
 		  });
 	  }
 	}
@@ -1508,6 +1700,10 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
     options.unshift({
       name: "PLAYLIST.Edit",
       icon: '<i class="fas fa-edit"></i>',
+	  condition: li => {
+		  const playlist = game.playlists.get(li.data("document-id"));
+		  return CustSidebarDirectory.haveEditPerms() && playlist.permission > 2;
+	  },
       callback: li => {
         const playlist = game.playlists.get(li.data("document-id"));
         const sheet = playlist.sheet;
@@ -1598,6 +1794,7 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
     const target = event.target.closest(".sound, .playlist");
     if ( !target ) return false;
     const playlist = game.playlists.get(data.playlistId);
+	if(!(playlist.permission > 2 && CustSidebarDirectory.haveEditPerms())) return false;
     const sound = playlist.sounds.get(data.soundId);
     const otherPlaylistId = target.dataset.documentId || target.dataset.playlistId;
 
@@ -1617,7 +1814,41 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   }
 }
 
-
+function handleSocketEvent(data){
+	console.log("Got socket data!");
+	console.log(data);
+	
+	if(data.worker != game.userId) return;
+	
+	if(data.action == "folder-create"){
+		if(!CustSidebarDirectory.haveCreatePerms(data.user)) return;
+		if(data.data.type != "Playlist") return; //No taking advantage that easily.
+		
+		data.data.description = data.user;
+		Folder.create(data.data);
+	} else if(data.action == "folder-edit"){
+		if(!CustSidebarDirectory.haveEditPerms(data.user)) return;
+		let folder = game.folders.get(data.target);
+		if(!folder?.data.description.includes(data.user)) return;
+		if(folder?.data.type != "Playlist") return;
+		
+		folder.update(data.data);
+	} else if(data.action == "folder-remove"){
+		if(!CustSidebarDirectory.haveEditPerms(data.user)) return;
+		let folder = game.folders.get(data.target);
+		if(!folder?.data.description.includes(data.user)) return;
+		if(folder?.data.type != "Playlist") return;
+		
+		folder.delete({deleteSubfolders: false, deleteContents: false})
+	} else if(data.action == "playlist-create"){
+		if(!CustSidebarDirectory.haveCreatePerms(data.user)) return;
+		return Playlist.create(data.data, {renderSheet: false}).then(function(playlist){
+			perms = {}
+			perms[data.user] = CONST.DOCUMENT_PERMISSION_LEVELS.OWNER;
+			playlist.update({permission: perms});
+		});
+	}
+}
 
 Hooks.once("ready", async function () {	
 	game.settings.register("music-permissions", "playback-perm",{
@@ -1669,6 +1900,10 @@ Hooks.once("ready", async function () {
 		onChange: value => {
 			ui["playlists"].render(true);
 		}
+	});
+
+	game.socket.on('module.music-permissions', function(data){
+		handleSocketEvent(data);
 	});
 
 	ui['playlists'] = new CustPlaylistDirectory()
