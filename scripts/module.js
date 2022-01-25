@@ -126,8 +126,9 @@ class CustSidebarDirectory extends SidebarTab {
   }
   
   static haveCreatePerms(userId = game.userId){
-	let user = game.users.get(userId);
-	return user.role >= game.settings.get("music-permissions", "create-perm");
+	return CustSidebarDirectory.haveEditPerms(userId);
+	//let user = game.users.get(userId);
+	//return user.role >= game.settings.get("music-permissions", "create-perm");
   }
   
   
@@ -925,6 +926,18 @@ class CustSidebarDirectory extends SidebarTab {
   _getEntryContextOptions() {
     return [
       {
+        name: "PERMISSION.Configure",
+        icon: '<i class="fas fa-lock"></i>',
+        condition: () => game.user.isGM,
+        callback: li => {
+          const document = this.constructor.collection.get(li.data("documentId"));
+          new PermissionControl(document, {
+            top: Math.min(li[0].offsetTop, window.innerHeight - 350),
+            left: window.innerWidth - 720
+          }).render(true);
+        }
+      },
+	  {
         name: "FOLDER.Clear",
         icon: '<i class="fas fa-folder"></i>',
         condition: li => {
@@ -962,23 +975,11 @@ class CustSidebarDirectory extends SidebarTab {
         }
       },
       {
-        name: "PERMISSION.Configure",
-        icon: '<i class="fas fa-lock"></i>',
-        condition: () => game.user.isGM,
-        callback: li => {
-          const document = this.constructor.collection.get(li.data("documentId"));
-          new PermissionControl(document, {
-            top: Math.min(li[0].offsetTop, window.innerHeight - 350),
-            left: window.innerWidth - 720
-          }).render(true);
-        }
-      },
-      {
         name: "SIDEBAR.Export",
         icon: '<i class="fas fa-file-export"></i>',
         condition: li => {
           const document = this.constructor.collection.get(li.data("documentId"));
-          return document.isOwner;
+          return document.permission > 1;
         },
         callback: li => {
           const document = this.constructor.collection.get(li.data("documentId"));
@@ -990,7 +991,7 @@ class CustSidebarDirectory extends SidebarTab {
         icon: '<i class="fas fa-file-import"></i>',
         condition: li => {
           const document = this.constructor.collection.get(li.data("documentId"));
-          return document.isOwner;
+          return document.isOwner && CustSidebarDirectory.haveEditPerms();
         },
         callback: li => {
           const document = this.constructor.collection.get(li.data("documentId"));
@@ -1276,12 +1277,12 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 			 
 			 if(!div.innerHTML.includes("playlist-stop")){
 				div.innerHTML = `
-				<a class="sound-control disabled" data-action="sound-create" title="` + game.i18n.localize('PLAYLIST.SoundCreate') + `">
+				<a class="sound-control` + (playlist.permission > 2 ? "" : "disabled") + `" data-action="sound-create" title="` + game.i18n.localize('PLAYLIST.SoundCreate') + `">
 					<i class="fas fa-plus"></i>
 				</a>` + div.innerHTML;
 			 }
 			 
-			 if(playlist.permission > 2){
+			 if(playlist.permission > 2 && CustSidebarDirectory.haveControlPerms()){
 				div.innerHTML = div.innerHTML.replaceAll("disabled", "")
 			 }
 		  });
@@ -1853,7 +1854,7 @@ function handleSocketEvent(data){
 Hooks.once("ready", async function () {	
 	game.settings.register("music-permissions", "playback-perm",{
 		name: "Playback: ",
-		hint: "Users of this role will see the songs they have permission to and play any of those songs. They will be able to stop any songs playing",
+		hint: "Users of this role and up will be able to start/stop songs in any playlists they own.",
 		scope: "world",
 		config: true,
 		type: Number,
@@ -1869,8 +1870,8 @@ Hooks.once("ready", async function () {
 	});
 
 	game.settings.register("music-permissions", "edit-perm",{
-		name: "Edit playlists: ",
-		hint: "Users of this role and above will be able to configure playlists they have ownership of and upload songs to any of them.",
+		name: "Edit: ",
+		hint: "Users of this role and above will be able to configure playlists and folders they have ownership of, including uploading, adding, and removing songs.",
 		scope: "world",
 		config: true,
 		type: Number,
@@ -1885,7 +1886,7 @@ Hooks.once("ready", async function () {
 		}
 	});
 
-	game.settings.register("music-permissions", "create-perm",{
+	/*game.settings.register("music-permissions", "create-perm",{
 		name: "Create playlists:",
 		hint: "Warning, enabling this setting requires editing server files. See GitHub for info.",
 		scope: "world",
@@ -1900,7 +1901,7 @@ Hooks.once("ready", async function () {
 		onChange: value => {
 			ui["playlists"].render(true);
 		}
-	});
+	});*/
 
 	game.socket.on('module.music-permissions', function(data){
 		handleSocketEvent(data);
