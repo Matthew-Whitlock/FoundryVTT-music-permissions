@@ -1,18 +1,22 @@
-function sendRemoteRequest(data){
-	data.user = game.userId;
-	
+async function sendRemoteRequest(data){
 	let worker = null;
+	
 	game.users.forEach( (user) => {
 		if(user.isGM && user.active && worker == null) worker = user.id
 	});
+	
 	if(worker == null){
-		throw new Error("A Game Master must be active for this action, sorry!");
+		let err = new Error("A Game Master must be active for this action, sorry!");
+		ui.notifications.error(err);
+		throw err;
 		return;
 	}
 	
 	data.worker = worker;
-	
-	game.socket.emit("module.music-permissions", data);
+	await new Promise((resolve, reject) => {
+		game.socket.emit("module.music-permissions", data);
+		return resolve();
+	})
 }
 
 class RemoteFolderConfig extends DocumentSheet {	
@@ -1151,6 +1155,8 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   _preparePlaylistData(playlist) {
     if ( playlist.playing ) this._playingPlaylists.push(playlist);
 
+	const min_control_perm = game.settings.get("music-permissions", "min-control-perm");
+	
     // Playlist configuration
     const p = playlist.data.toObject(false);
     p.modeTooltip = this._getModeTooltip(p.mode);
@@ -1158,18 +1164,20 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
     p.disabled = p.mode === CONST.PLAYLIST_MODES.DISABLED;
     p.expanded = this._expanded.has(p._id);
     p.css = [p.expanded ? "" : "collapsed", playlist.playing ? "playing" : ""].filterJoin(" ")
-    p.controlCSS = (CustSidebarDirectory.haveControlPerms() && (playlist.permission > 2) && !p.disabled) ? "" : "disabled";
+    p.controlCSS = (CustSidebarDirectory.haveControlPerms() && ((playlist.permission >= min_control_perm) && !p.disabled)) ? "" : "disabled";
 
     // Playlist sounds
     const sounds = [];
     for ( let sound of playlist.sounds ) {
-      if ( !(playlist.permission > 1) && !sound.playing ) continue;
+      if ( !((playlist.permission > 0 && game.settings.get("music-permissions", "limited-vision")) || playlist.permission > 1) && (!sound.playing && !(sound.data.pausedTime && CustSidebarDirectory.haveControlPerms() && playlist.permission >= min_control_perm)) ){
+		continue;
+	  }
 
       // All sounds
       const s = sound.data.toObject(false);
       s.playlistId = playlist.id;
       s.css = s.playing ? "playing" : "";
-      s.controlCSS = (CustSidebarDirectory.haveControlPerms() && playlist.permission > 2) ? "" : "disabled";
+      s.controlCSS = (CustSidebarDirectory.haveControlPerms() && playlist.permission >= min_control_perm) ? "" : "disabled";
       s.playIcon = this._getPlayIcon(sound);
       s.playTitle = s.pausedTime ? "PLAYLIST.SoundResume" : "PLAYLIST.SoundPlay";
 
@@ -1270,20 +1278,29 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 		  });
 	  }
 	  
-	  if(CustSidebarDirectory.haveEditPerms()){
+	  if(CustSidebarDirectory.haveEditPerms() || CustSidebarDirectory.haveControlPerms() || !game.settings.get("music-permissions", "limited-vision")){
 		  html.find('.playlist-controls').each(function(num, div){
 			 const li = div.closest(".playlist-header")
 			 const playlist = game.playlists.get(li.dataset.documentId);
 			 
-			 if(!div.innerHTML.includes("playlist-stop")){
-				div.innerHTML = `
-				<a class="sound-control` + (playlist.permission > 2 ? "" : "disabled") + `" data-action="sound-create" title="` + game.i18n.localize('PLAYLIST.SoundCreate') + `">
-					<i class="fas fa-plus"></i>
-				</a>` + div.innerHTML;
+			 if(playlist.permission == 1 && !game.settings.get("music-permissions", "limited-vision")){
+				li.querySelector(".playlist-name").querySelector(".collapse").style.display = 'none'
+				div.querySelectorAll(".sound-control").forEach( function(idiv){
+					console.dir(idiv)
+					if(["Previous Sound", "Next Sound"].includes(idiv.title)) idiv.style.display = "none"
+				});
 			 }
 			 
-			 if(playlist.permission > 2 && CustSidebarDirectory.haveControlPerms()){
+			 if((playlist.permission > 2) && CustSidebarDirectory.haveControlPerms()){
 				div.innerHTML = div.innerHTML.replaceAll("disabled", "")
+			 }
+			 
+			 
+			 if(!div.innerHTML.includes("playlist-stop") && ((playlist.permission > 2 && CustSidebarDirectory.haveEditPerms()))){
+				div.innerHTML = `
+				<a class="sound-control" data-action="sound-create" title="` + game.i18n.localize('PLAYLIST.SoundCreate') + `">
+					<i class="fas fa-plus"></i>
+				</a>` + div.innerHTML;
 			 }
 		  });
 	  }
@@ -1439,8 +1456,14 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   _onPlaylistPlay(event, playing) {
     const li = event.currentTarget.closest(".playlist");
     const playlist = game.playlists.get(li.dataset.documentId);
-    if ( playing ) return playlist.playAll();
-    else return playlist.stopAll();
+	const do_remote = (!game.user.isGM && playlist.permission >= game.settings.get("music-permissions", "min-control-perm"))
+    if ( playing ){
+		if(do_remote) return sendRemoteRequest({action:"playlist-playAll", target: li.dataset.documentId})
+		return playlist.playAll();
+	} else {
+		if(do_remote) return sendRemoteRequest({action:"playlist-stopAll", target: li.dataset.documentId})
+		return playlist.stopAll();
+	}
   }
 
   /* -------------------------------------------- */
@@ -1454,7 +1477,17 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   _onPlaylistSkip(event, action) {
     const li = event.currentTarget.closest(".playlist");
     const playlist = game.playlists.get(li.dataset.documentId);
-    return playlist.playNext(undefined, {direction: action === "playlist-forward" ? 1 : -1});
+	
+	let direction = action === "playlist-forward" ? 1 : -1
+	
+	const do_remote = (!game.user.isGM && playlist.permission >= game.settings.get("music-permissions", "min-control-perm"))
+	if(do_remote) return sendRemoteRequest({
+		action: "playlist-skip",
+		target: li.dataset.documentId,
+		data: direction
+	});
+    
+	return playlist.playNext(undefined, {direction: direction});
   }
 
   /* -------------------------------------------- */
@@ -1496,12 +1529,16 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
     const li = event.currentTarget.closest(".sound");
     const playlist = game.playlists.get(li.dataset.playlistId);
     const sound = playlist.sounds.get(li.dataset.soundId);
+	const do_remote = (!game.user.isGM && playlist.permission >= game.settings.get("music-permissions", "min-control-perm"))
     switch ( action ) {
       case "sound-play":
+		if(do_remote) return sendRemoteRequest({action: "sound-play", target: li.dataset.soundId, playlist: li.dataset.playlistId})
         return playlist.playSound(sound);
       case "sound-pause":
+	    if(do_remote) return sendRemoteRequest({action: "sound-pause", target: li.dataset.soundId, playlist: li.dataset.playlistId})
         return sound.update({playing: false, pausedTime: sound.sound.currentTime});
       case "sound-stop":
+		if(do_remote) return sendRemoteRequest({action: "sound-stop", target: li.dataset.soundId, playlist: li.dataset.playlistId})
         return playlist.stopSound(sound);
     }
   }
@@ -1815,46 +1852,104 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   }
 }
 
-function handleSocketEvent(data){
+function sendSocketErr(err, dest){
+	
+}
+
+function handleSocketEvent(data, src){
 	console.log("Got socket data!");
 	console.log(data);
 	
 	if(data.worker != game.userId) return;
 	
+	//I know there's a ton of code duplication below, I've expanded from the original actions and I'm lazy.
+	//Will improve some other time. Maybe.
+	
+	if(data.action == "error"){
+		if(!game.users.get(src).isGM) return; //No sending other players errors for funsies.
+		ui.notifications.error(new Error(data.err));
+	} else if(!game.user.isGM){
+		return; //I shouldn't be the worker for this, I don't have server permissions to do the actions below.
+	}
+	
 	if(data.action == "folder-create"){
-		if(!CustSidebarDirectory.haveCreatePerms(data.user)) return;
-		if(data.data.type != "Playlist") return; //No taking advantage that easily.
+		if(!CustSidebarDirectory.haveCreatePerms(src)) return "You do not have permission to create folders!";
+		if(data.data.type != "Playlist") return "You are not allowed to create folders outside of the playlist directory!";
 		
-		data.data.description = data.user;
+		data.data.description = src;
 		Folder.create(data.data);
 	} else if(data.action == "folder-edit"){
-		if(!CustSidebarDirectory.haveEditPerms(data.user)) return;
+		if(!CustSidebarDirectory.haveEditPerms(src)) return "You do not have permission to edit folders!";
 		let folder = game.folders.get(data.target);
-		if(!folder?.data.description.includes(data.user)) return;
-		if(folder?.data.type != "Playlist") return;
+		if(!folder?.data.description.includes(src)) return "You cannot edit folders you did not create!";
+		if(folder?.data.type != "Playlist") return "You are not allowed to edit folders outside of the playlist directory!";
 		
 		folder.update(data.data);
 	} else if(data.action == "folder-remove"){
-		if(!CustSidebarDirectory.haveEditPerms(data.user)) return;
+		if(!CustSidebarDirectory.haveEditPerms(src)) return "You do not have permission to remove folders!";
 		let folder = game.folders.get(data.target);
-		if(!folder?.data.description.includes(data.user)) return;
-		if(folder?.data.type != "Playlist") return;
+		if(!folder?.data.description.includes(src)) return "You cannot remove folders you did not create!";
+		if(folder?.data.type != "Playlist") return "You are not allowed to remove folders outside of the playlist directory!";
 		
 		folder.delete({deleteSubfolders: false, deleteContents: false})
 	} else if(data.action == "playlist-create"){
-		if(!CustSidebarDirectory.haveCreatePerms(data.user)) return;
+		if(!CustSidebarDirectory.haveCreatePerms(src)) return "You do not have permission to create playlists!";
 		return Playlist.create(data.data, {renderSheet: false}).then(function(playlist){
 			perms = {}
-			perms[data.user] = CONST.DOCUMENT_PERMISSION_LEVELS.OWNER;
+			perms[src] = CONST.DOCUMENT_PERMISSION_LEVELS.OWNER;
 			playlist.update({permission: perms});
 		});
+	} else if(data.action == "playlist-playAll"){
+		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
+		let playlist = game.playlists.get(data.target);
+		if(!playlist) return "Internal error: Cannot find playlist!";
+		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to play this playlist!";
+		playlist.playAll();
+	} else if(data.action == "playlist-stopAll"){
+		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
+		let playlist = game.playlists.get(data.target);
+		if(!playlist) return "Internal error: Cannot find playlist!";
+		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return"You do not have permission to stop this playlist!";
+		playlist.stopAll();
+	} else if(data.action == "playlist-skip"){
+		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
+		let playlist = game.playlists.get(data.target);
+		if(!playlist) return "Internal error: Cannot find playlist!";
+		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return"You do not have permission to control this playlist!";
+		if(((playlist.data.permission[src]??playlist.data.permission["default"]) == 1) && !game.settings.get("music-permissions","limited-vision"))
+			return "You cannot skip in playlists whose songs you cannot see!"
+		playlist.playNext(undefined, {direction: data.data})
+	} else if(data.action == "sound-play"){
+		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
+		let playlist = game.playlists.get(data.playlist);
+		if(!playlist) return "Internal error: Cannot find playlist!";
+		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to play from this playlist!";
+		let sound = playlist.sounds.get(data.target)
+		if(!sound) return "Internal error: Cannot find sound!"
+		playlist.playSound(sound);
+	} else if(data.action == "sound-stop"){
+		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
+		let playlist = game.playlists.get(data.playlist);
+		if(!playlist) return "Internal error: Cannot find playlist!";
+		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to stop sounds in this playlist!";
+		let sound = playlist.sounds.get(data.target)
+		if(!sound) return "Internal error: Cannot find sound!"
+		playlist.stopSound(sound);
+	} else if(data.action == "sound-pause"){
+		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
+		let playlist = game.playlists.get(data.playlist);
+		if(!playlist) return "Internal error: Cannot find playlist!";
+		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to pause sounds in this playlist!";
+		let sound = playlist.sounds.get(data.target)
+		if(!sound) return "Internal error: Cannot find sound!"
+		sound.update({playing: false, pausedTime: sound.sound.currentTime});
 	}
 }
 
 Hooks.once("ready", async function () {	
 	game.settings.register("music-permissions", "playback-perm",{
 		name: "Playback: ",
-		hint: "Users of this role and up will be able to start/stop songs in any playlists they own.",
+		hint: "Users of this role and up will be able to start/stop songs in any playlists have permissions in.",
 		scope: "world",
 		config: true,
 		type: Number,
@@ -1863,7 +1958,7 @@ Hooks.once("ready", async function () {
 			2: "Trusted players",
 			3: "Assistant GMs"
 		},
-		default: "3",
+		default: 3,
 		onChange: value => {
 			ui["playlists"].render(true);
 		}
@@ -1871,7 +1966,7 @@ Hooks.once("ready", async function () {
 
 	game.settings.register("music-permissions", "edit-perm",{
 		name: "Edit: ",
-		hint: "Users of this role and above will be able to configure playlists and folders they have ownership of, including uploading, adding, and removing songs.",
+		hint: "Users of this role and above will be able to configure playlists and folders they have permissions for, including uploading, adding, and removing songs.",
 		scope: "world",
 		config: true,
 		type: Number,
@@ -1880,7 +1975,37 @@ Hooks.once("ready", async function () {
 			2: "Trusted players",
 			3: "Assistant GMs"
 		},
-		default: "3",
+		default: 3,
+		onChange: value => {
+			ui["playlists"].render(true);
+		}
+	});
+	
+	game.settings.register("music-permissions", "min-control-perm",{
+		name: "Minimum control permission:",
+		hint: "What ownership level must a player have to play from a playlist?",
+		scope: "world",
+		config: true,
+		type: Number,
+		choices: {
+			1: "Limited",
+			2: "Observer",
+			3: "Owner"
+		},
+		default: 2,
+		default: true,
+		onChange: value => {
+			ui["playlists"].render(true);
+		}
+	});
+	
+	game.settings.register("music-permissions", "limited-vision",{
+		name: "Limited viewers can see songs?: ",
+		hint: "Can people assigned limited permissions to a playlist see the names of the songs inside?",
+		scope: "world",
+		config: true,
+		type: Boolean,
+		default: true,
 		onChange: value => {
 			ui["playlists"].render(true);
 		}
@@ -1903,8 +2028,14 @@ Hooks.once("ready", async function () {
 		}
 	});*/
 
-	game.socket.on('module.music-permissions', function(data){
-		handleSocketEvent(data);
+	game.socket.on('module.music-permissions', function(data, src){
+		let err = handleSocketEvent(data, src);
+		if(!err) return;
+		game.socket.emit("module.music-permissions", {
+			worker: src,
+			action: "error",
+			err: err
+		});
 	});
 
 	ui['playlists'] = new CustPlaylistDirectory()

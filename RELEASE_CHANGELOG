@@ -1,0 +1,4 @@
+Add better configurability to permissions system. Most actions now require a GM to be active.
+You can now configure permissions in ways like:
+ * Allowing a player to see the songs in a playlist, but not edit or play them.
+ * Allowing a player to play a playlist, but not see the songs inside (or skip songs).
