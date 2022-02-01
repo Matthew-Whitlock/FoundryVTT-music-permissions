@@ -84,8 +84,8 @@ class RemoteFolderConfig extends DocumentSheet {
 	  });
       return true;
     }
-	console.log("Sending edit request!");
-	console.log(this.object)
+	//console.log("Sending edit request!");
+	//console.log(this.object)
     sendRemoteRequest({
 		action: "folder-edit",
 		target: this.object.id,
@@ -1286,13 +1286,19 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 			 if(playlist.permission == 1 && !game.settings.get("music-permissions", "limited-vision")){
 				li.querySelector(".playlist-name").querySelector(".collapse").style.display = 'none'
 				div.querySelectorAll(".sound-control").forEach( function(idiv){
-					console.dir(idiv)
 					if(["Previous Sound", "Next Sound"].includes(idiv.title)) idiv.style.display = "none"
 				});
 			 }
 			 
 			 if((playlist.permission > 2) && CustSidebarDirectory.haveControlPerms()){
 				div.innerHTML = div.innerHTML.replaceAll("disabled", "")
+				if(playlist.mode == CONST.PLAYLIST_MODES.DISABLED){
+					div.querySelectorAll(".sound-control").forEach( function(idiv){
+						if(idiv.attributes["data-action"].nodeValue == "playlist-play"){
+							idiv.disabled = true
+						}
+					});
+				}
 			 }
 			 
 			 
@@ -1459,9 +1465,11 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 	const do_remote = (!game.user.isGM && playlist.permission >= game.settings.get("music-permissions", "min-control-perm"))
     if ( playing ){
 		if(do_remote) return sendRemoteRequest({action:"playlist-playAll", target: li.dataset.documentId})
+		MusicPermissions.sendRemoteForceNotif(playlist.id, "all")
 		return playlist.playAll();
 	} else {
 		if(do_remote) return sendRemoteRequest({action:"playlist-stopAll", target: li.dataset.documentId})
+		MusicPermissions.sendRemoteForceNotif(playlist.id, "all")
 		return playlist.stopAll();
 	}
   }
@@ -1487,6 +1495,7 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 		data: direction
 	});
     
+	MusicPermissions.sendRemoteForceNotif(playlist.id, "all")
 	return playlist.playNext(undefined, {direction: direction});
   }
 
@@ -1532,14 +1541,17 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
 	const do_remote = (!game.user.isGM && playlist.permission >= game.settings.get("music-permissions", "min-control-perm"))
     switch ( action ) {
       case "sound-play":
+	    MusicPermissions.sendRemoteForceNotif(playlist.id, "all")
 		if(do_remote) return sendRemoteRequest({action: "sound-play", target: li.dataset.soundId, playlist: li.dataset.playlistId})
         return playlist.playSound(sound);
       case "sound-pause":
+	    MusicPermissions.sendRemoteForceNotif(playlist.id, "all")
 	    if(do_remote) return sendRemoteRequest({action: "sound-pause", target: li.dataset.soundId, playlist: li.dataset.playlistId})
         return sound.update({playing: false, pausedTime: sound.sound.currentTime});
       case "sound-stop":
+	    MusicPermissions.sendRemoteForceNotif(playlist.id, "all")
 		if(do_remote) return sendRemoteRequest({action: "sound-stop", target: li.dataset.soundId, playlist: li.dataset.playlistId})
-        return playlist.stopSound(sound);
+		return playlist.stopSound(sound);
     }
   }
 
@@ -1852,18 +1864,18 @@ class CustPlaylistDirectory extends CustSidebarDirectory {
   }
 }
 
-function sendSocketErr(err, dest){
-	
-}
-
 function handleSocketEvent(data, src){
-	console.log("Got socket data!");
-	console.log(data);
+	//console.log("Got socket data!");
+	//console.log(data);
 	
-	if(data.worker != game.userId) return;
+	if(!data.worker.includes("all") && !data.worker.includes(game.userId)) return;
 	
-	//I know there's a ton of code duplication below, I've expanded from the original actions and I'm lazy.
-	//Will improve some other time. Maybe.
+	
+	
+	if(data.action == "force-notif" && (data.worker.includes("all") || data.worker.includes(game.userId)) && game.settings.get("music-permissions", "min-locals-role") != 5){
+		MusicPermissions._force_next_reqs.push({playlistId: data.target, userId: src});
+	}
+	
 	
 	if(data.action == "error"){
 		if(!game.users.get(src).isGM) return; //No sending other players errors for funsies.
@@ -1899,11 +1911,18 @@ function handleSocketEvent(data, src){
 			perms[src] = CONST.DOCUMENT_PERMISSION_LEVELS.OWNER;
 			playlist.update({permission: perms});
 		});
-	} else if(data.action == "playlist-playAll"){
+	} else {
+		//Past this are all sound updates that aren't local and are manually done, send a force notif first.
+		MusicPermissions.sendRemoteForceNotif(data.playlist ?? data.target, "all")
+	}
+	
+	if(data.action == "playlist-playAll"){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
 		let playlist = game.playlists.get(data.target);
 		if(!playlist) return "Internal error: Cannot find playlist!";
 		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to play this playlist!";
+		
+		
 		playlist.playAll();
 	} else if(data.action == "playlist-stopAll"){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
@@ -1946,6 +1965,212 @@ function handleSocketEvent(data, src){
 	}
 }
 
+
+//Replacement for Sound objs that prevents updates from remote sources,
+//so we can manually handle.
+class MusicPermissionsSound extends Sound {
+	constructor(soundSrc, autoplay = false, autoplay_info = {}){
+		super(soundSrc.src);
+		this.MusicPermissions = true;
+		this.events = soundSrc.events;
+		
+		soundSrc.events = {
+			end: {},
+			pause: {},
+			start: {},
+			stop: {},
+			load: {}
+		}
+		
+		this._eventHandlerId = 1;
+		for(let listName in this.events){
+			for(let id in this.events[listName]){
+				if(this._eventHandlerId <= id){
+					this._eventHandlerId = id+1;
+				}
+			}
+		}
+		this._eventHandlerId += 100; //Just in case some events were added then removed, and they try to remove them again. Very unlikely, but whatever.
+		
+		if(autoplay){
+			this.doing_internal = true;
+			this.load({autoplay: true, autoplayOptions: autoplay_info}) //TODO: figure out how to also get correct volume here.
+			this.doing_internal = false;
+		}
+		
+	}
+	
+	  /**
+	* Load the audio source, creating an AudioBuffer.
+	* Audio loading is idempotent, it can be requested multiple times but only the first load request will be honored.
+	* @param {object} [options={}]   Additional options which affect resource loading
+	* @param {boolean} [options.autoplay=false]  Automatically begin playback of the audio source once loaded
+	* @param {object} [options.autoplayOptions]  Additional options passed to the play method when loading is complete
+	* @returns {Promise<Sound>}      The Sound once its source audio buffer is loaded
+	*/
+	async _load({autoplay=false, autoplayOptions={}}={}) {
+
+		// Delay audio loading until after an observed user gesture
+		if ( game.audio.locked ) {
+			console.log(`${vtt} | Delaying load of sound ${this.src} until after first user gesture`);
+			await new Promise(resolve => game.audio.pending.push(resolve));
+		}
+
+		// Currently loading
+		if ( this.loading instanceof Promise ) await this.loading;
+
+		// If loading is required, cache the promise for idempotency
+		if ( !this.container || this.container.loadState === AudioContainer.LOAD_STATES.NONE ) {
+			this.loading = this.container.load();
+			await this.loading;
+			this.loading = undefined;
+		}
+
+		// Trigger automatic playback actions
+		let doing_internal = this.doing_internal;
+		this.doing_internal = true;
+		if ( autoplay ) this.play(autoplayOptions);
+		this.doing_internal = doing_internal;
+		return this;
+	}
+	
+	load({autoplay=false, autoplayOptions={}}={}) {
+		if(!MusicPermissions._doing_local_update && !this.doing_internal) return this;
+		this._load({autoplay: autoplay, autoplayOptions: autoplayOptions});
+	}
+
+	
+	fade(volume, {duration=1000, from, type="linear"}={}){
+		if(!MusicPermissions._doing_local_update && !this.doing_internal) return Promise.resolve(1);
+		let doing_internal = this.doing_internal;
+		this.doing_internal = true;
+		let ret = super.fade(volume, {duration: duration, from: from, type:type});
+		this.doing_internal = doing_internal;
+		return ret;
+	}
+	
+	play({loop=false, offset, volume, fade=0}){
+		if(!MusicPermissions._doing_local_update && !this.doing_internal && !this.playing) return;
+		let doing_internal = this.doing_internal;
+		this.doing_internal = true;
+		let ret = super.play({loop:loop, offset: offset, volume: volume, fade: fade});
+		this.doing_internal = doing_internal;
+		return ret;
+	}
+	
+	pause(){
+		if(!MusicPermissions._doing_local_update && !this.doing_internal) return;
+		let doing_internal = this.doing_internal;
+		this.doing_internal = true;
+		let ret = super.pause()
+		this.doing_internal = doing_internal;
+		return ret;
+	}
+	
+	stop(){
+		if(!MusicPermissions._doing_local_update && !this.doing_internal && !MusicPermissions._sounds_to_stop.includes(this)) return;
+		let doing_internal = this.doing_internal;
+		this.doing_internal = true;
+		let ret = super.stop();
+		this.doing_internal = doing_internal;
+		return ret;
+	}
+
+	//Must manually copy all static entries, like get/set.
+
+	/* -------------------------------------------- */
+	/*  Properties                                  */
+	/* -------------------------------------------- */
+
+	/**
+	* A convenience reference to the sound context used by the application
+	* @returns {AudioContext}
+	*/
+	get context() {
+		return super.context;
+	}
+
+	/**
+	* A reference to the audio source node being used by the AudioContainer
+	* @returns {AudioBufferSourceNode|MediaElementAudioSourceNode}
+	*/
+	get node() {
+		return super.node;
+	}
+
+	/**
+	* A reference to the GainNode parameter which controls volume
+	* @type {AudioParam}
+	*/
+	get gain() {
+		return super.gain;
+	}
+
+	/**
+	* The current playback time of the sound
+	* @returns {number}
+	*/
+	get currentTime() {
+		return super.currentTime
+	}
+
+	/**
+	* The total sound duration, in seconds
+	* @type {number}
+	*/
+	get duration() {
+		return super.duration
+	}
+
+	/**
+	* Is the contained audio node loaded and ready for playback?
+	* @type {boolean}
+	*/
+	get loaded() {
+		return super.loaded
+	}
+
+	/**
+	* Did the contained audio node fail to load?
+	* @type {boolean}
+	*/
+	get failed() {
+		return super.failed
+	}
+
+	/**
+	* Is the audio source currently playing?
+	* @type {boolean}
+	*/
+	get playing() {
+		return super.playing
+	}
+
+	/**
+	* Is the Sound current looping?
+	* @type {boolean}
+	*/
+	get loop() {
+		return super.loop
+	}
+	set loop(looping) {
+		super.loop = looping;
+	}
+
+	/**
+	* The volume at which the Sound is playing
+	* @returns {number}
+	*/
+	get volume() {
+		return super.volume
+	}
+	set volume(value) {
+		super.volume = value
+	}
+	
+	
+}
+
 Hooks.once("ready", async function () {	
 	game.settings.register("music-permissions", "playback-perm",{
 		name: "Playback: ",
@@ -1981,6 +2206,26 @@ Hooks.once("ready", async function () {
 		}
 	});
 	
+	//Will be used if I set up a ui interface to the 
+	game.settings.register("music-permissions", "min-locals-role",{
+		name: "Minimum local-playback permissions:",
+		hint: "What roll is needed to allow a user to control people's local playback settings?",
+		scope: "world",
+		config: true,
+		type: Number,
+		choices: {
+			1: "All players",
+			2: "Trusted players",
+			3: "Assistant GMs",
+			4: "GM",
+			5: "Disabled"
+		},
+		default: 5,
+		onChange: value => {
+			ui["playlists"].render(true);
+		}
+	});
+	
 	game.settings.register("music-permissions", "min-control-perm",{
 		name: "Minimum control permission:",
 		hint: "What ownership level must a player have to play from a playlist?",
@@ -1993,7 +2238,6 @@ Hooks.once("ready", async function () {
 			3: "Owner"
 		},
 		default: 2,
-		default: true,
 		onChange: value => {
 			ui["playlists"].render(true);
 		}
@@ -2011,6 +2255,7 @@ Hooks.once("ready", async function () {
 		}
 	});
 
+	//Wrapped into edit permissions now, keeping for posterity or something.
 	/*game.settings.register("music-permissions", "create-perm",{
 		name: "Create playlists:",
 		hint: "Warning, enabling this setting requires editing server files. See GitHub for info.",
@@ -2040,8 +2285,606 @@ Hooks.once("ready", async function () {
 
 	ui['playlists'] = new CustPlaylistDirectory()
 	ui['playlists'].render(true)
+	
+	Hooks.on("updatePlaylist", function(playlist, change, info, userId){
+		if('permission' in change) ui["playlists"].render(true);
+		
+		if(game.settings.get("music-permissions", "min-locals-role") == 5) return;
+		
+		change.sounds?.forEach(soundChange => {
+			if("path" in soundChange){
+				//sound.sound was replaced with a new Sound, not our MusicPermissionsSound.
+				let sound = game.playlists.get(playlist.id)?.sounds?.get(soundChange._id)
+				if(!sound) return;
+				sound.sound = new MusicPermissionsSound(sound.sound);
+				if(sound.playing){
+					MusicPermissions._doing_local_update = true;
+					sound.sync()
+					MusicPermissions._doing_local_update = true;
+				}
+			}
+		})
+		
+		if(userId != "local"){
+			if(MusicPermissions._doing_local_update){
+				console.log("Music Permissions: A remote update ran in the middle of a local one, changes were pushed to sounds :( Should be fine, but poorly tested.")
+				MusicPermissions.caught_interleaving = true;
+			}
+			MusicPermissions._render_on_local_updates = false;
+			MusicPermissions._handle_remote_change(playlist, change, userId);
+			MusicPermissions._render_on_local_updates = true;
+		}
+	});
+	
+	Hooks.on("updatePlaylistSound", function(playlistSound, change, info, userId){
+		if('permission' in change) ui["playlists"].render(true);
+		
+		if(game.settings.get("music-permissions", "min-locals-role") == 5) return;
+		
+
+		if("path" in change){
+			//playlistSound.sound was replaced with a new Sound, not our MusicPermissionsSound.
+			playlistSound.sound = new MusicPermissionsSound(playlistSound.sound);
+			if(playlistSound.playing){
+				MusicPermissions._doing_local_update = true;
+				playlistSound.sync()
+				MusicPermissions._doing_local_update = false;
+			}
+		}
+
+		
+		if(userId != "local"){
+			if(MusicPermissions._doing_local_update){
+				console.log("Music Permissions: A remote update ran in the middle of a local one, changes were pushed to sounds :(")
+				MusicPermissions.caught_interleaving = true;
+			}
+			MusicPermissions._render_on_local_updates = false;
+			MusicPermissions._handle_remote_change(playlistSound, change, userId, true);
+			MusicPermissions._render_on_local_updates = true;
+		}
+	});
+	
+	Hooks.on("createPlaylistSound", function(sound, options, userId){ //TODO: test that this actually works.
+		if(game.settings.get("music-permissions", "min-locals-role") == 5) return;
+		sound.sound = new MusicPermissionsSound(sound.sound);
+	})
+	
+	//Replace all Sound objs with MusicPermissionsSound objs.
+	if(game.settings.get("music-permissions", "min-locals-role") == 5) return;
+
+	game.audio.pending = []//Remove any of the old Sound objs scheduled to play
+	//TODO: rerun this when settings change to enable local sounds, and undo this when changed in the other direction.
+	game.playlists.forEach(playlist => {
+		playlist.sounds.forEach(sound => {
+			sound.sound = new MusicPermissionsSound(sound.sound);
+			if(sound.playing){
+				MusicPermissions._doing_local_update = true;
+				sound.sync()
+				MusicPermissions._doing_local_update = false;
+			}
+		})
+	})
 });
 
-Hooks.on("updatePlaylist", function(playlist, change, info, id){
-	if('permission' in change) ui["playlists"].render(true);
-});
+//Separate the functions we're defining.
+//Variables and functions prefixed with an underscore are internal use only. DO NOT USE DIRECTLY. Unless you want to, I'm not your boss.
+//		If you're finding yourself having to use the internal only stuff, ideally make an issue in github to request the functionality
+//		you're wanting - to help others.
+//EXPERIMENTAL
+class MusicPermissions{
+	static _user_locals_known = new Map(); //userId -> playlistId -> soundId -> {playing: , paused: , callbackIds: map callback name -> callbackId, soundSrc: Sound (not PlaylistSound!)}
+	
+	//Internal use only (Unless you wanna, I'm not your boss.)
+	//Promise w/ a short delay before running a render of the playlist dir, to catch when a bunch of updates come in quickly.
+	static _handling_updates = null;
+	
+	//Fill with {playlistId, userId} for requested playlist and requesting userId of remote commands we should actually listen to.
+	static _force_next_reqs = [];
+	
+	static _sounds_to_stop = [];
+	
+	static _handling_real_updates = true;
+	static _render_on_local_updates = true;
+	static _caught_interleaving = false;
+	
+	static _doing_local_update = false;
+	//isReal=false to locally update w/o changing sound states (IE when fixing playlist from a rejected remote update)
+	static _local_update(update, render = null, isReal = null, second_run = false){
+		if(render === null) render = MusicPermissions._render_on_local_updates
+		if(isReal === null) isReal = MusicPermissions._handling_real_updates;
+		if(isReal) MusicPermissions._doing_local_update = true;
+		try {
+			let opts = {}
+			if(!render) opts.render = false;
+			//console.log("Starting local update, is real: " + isReal);
+			if(isReal){
+				let playlist = game.playlists.get(update._id);
+				let localPlaylistInfo = MusicPermissions._user_locals_known.get(game.userId)?.get(update._id);
+				update.sounds?.forEach(soundChange => {
+					let playlistSound = playlist?.sounds.get(soundChange._id);
+					if(!playlistSound) return;
+					
+					if((playlistSound.playing || playlistSound.paused) && (!soundChange.playing && !soundChange.pausedTime)){
+						//We currently show this sound as playing and want to stop it
+						MusicPermissions._sounds_to_stop.push(playlistSound.sound);
+					}
+				});
+			}
+			globalThis.CONFIG.DatabaseBackend._handleUpdateDocuments({request: {type: "Playlist", options: opts, pack: null}, result: [update], userId: "local"});
+			if(isReal) MusicPermissions._doing_local_update = false;
+		} catch (err){
+			if(!second_run) MusicPermissions.restorePlaylistToLocal(update.id, true);
+			MusicPermissions._sounds_to_stop = [];
+			if(isReal) MusicPermissions._doing_local_update = false;
+			throw(err);
+		}
+	}
+	
+	static _rm_local_callbacks(soundInfo){
+		let callbacks = soundInfo?.callbackIds;
+		if(!callbacks) return;
+		
+		let sound = soundInfo.soundSrc;
+		if(!sound) return;
+		
+		for( [name, id] in callbacks ){
+			sound.off(name, id);
+		}
+		
+		callbacks.clear();
+	}
+	
+	//soundInfo = {playing: bool, paused: bool, callbackIds: map(callback name, callbackId)}
+	static _add_sound_locally(playlistId, soundId, soundInfo, globalState){
+		let my_locals = MusicPermissions._user_locals_known.get(game.userId)
+		if(!my_locals){
+			my_locals = new Map();
+			MusicPermissions._user_locals_known.set(game.userId, my_locals)
+			my_locals.set(playlistId, new Map());
+			my_locals.get(playlistId).set(soundId, {});
+		}
+		
+		let my_playlists = my_locals.get(playlistId);
+		if(!my_playlists){
+			my_playlists = new Map();
+			my_locals.set(playlistId, my_playlists);
+		}
+		
+		soundInfo.global = globalState;
+		my_playlists.set(soundId, soundInfo);
+	}
+	
+	static _del_multiple_sounds_locally(playlistId, soundIds){
+		if(!soundIds || soundIds.length == 0) return;
+		let sounds = MusicPermissions._user_locals_known.get(game.userId)?.get(playlistId);
+		if(!sounds) return;
+		
+		soundIds.forEach(soundId => {
+			if(!sounds) return; //May have deleted this playlist already
+			MusicPermissions._rm_local_callbacks(sounds.get(soundId));		
+			sounds.delete(soundId);
+			if(sounds.length == 0){
+				my_locals.delete(playlistId);
+			}
+		});
+	}
+	
+	static _del_sound_locally(playlistId, soundId){
+		if(!soundId) return;
+		MusicPermissions._del_multiple_sounds_locally(playlistId, [soundId]);
+	}
+	
+	static _del_playlist_locally(playlistId){
+		let toDel = game.playlists.get(playlistId)?.sounds?.map(sound => sound.id);
+		MusicPermissions._del_multiple_sounds_locally(playlistId, toDel);
+	}
+	
+	//Add extra_namespace to also broadcast to another module. //TODO
+	static _broadcast_local_sounds(extra_namespace = null){
+		
+	}
+	
+	//TODO
+	static _handle_sounds_update(userId, newSounds){
+		
+	}
+	
+	static _attach_play_sound_callback(playlistId, soundId){
+		let playlist = game.playlists.get(playlistId)
+		let soundSrc = playlist?.sounds.get(soundId).sound;
+		if(!soundSrc) return;
+		
+		soundSrc.events = {
+			end: {},
+			pause: {},
+			start: {},
+			stop: {},
+			load: {}
+		}; //This probably isn't the best way to do this...
+		   //TODO: See if we can just not transfer hooks from the original Sound to MusicPermissionsSound
+		   //Ideally we don't erase any events other modules have attached. Seems a bit unlikely that they would have though.
+		
+		function callback_template_end(soundId, baseSoundObj) {
+			if ( ![CONST.PLAYLIST_MODES.SEQUENTIAL, CONST.PLAYLIST_MODES.SHUFFLE].includes(this.mode) ){
+				//Either soundboard mode or some new mode, just stop this sound.
+				MusicPermissions.stopSoundLocally(this.id, soundId);
+				return;
+			}
+
+			// Determine the next sound
+			if ( !soundId ) {
+			  const current = this.sounds.find(s => s.playing);
+			  soundId = current?.id || null;
+			}
+			let next = this._getNextSound(soundId).id;
+			if ( !this.data.playing ) next = null;
+
+			
+			// Enact playlist updates
+			MusicPermissions.playSoundLocally(this.id, next);
+		}
+		
+		let callback_end = callback_template_end.bind(playlist, soundId);
+		let callbackId = soundSrc.on("end", callback_end, {once: true});
+
+
+		let soundInfo = MusicPermissions._user_locals_known.get(game.userId)?.get(playlistId)?.get(soundId)
+		if(!soundInfo){
+			//This shouldn't happen!
+			console.log("Music Permissions Error: Attaching callback to sound not playing locally. Please report this to the github!");
+			soundSrc.off("end", callbackId);
+		}
+		
+		MusicPermissions._rm_local_callbacks(soundInfo);
+		soundInfo.soundSrc = soundSrc;
+		if(!soundInfo.callbackIds) soundInfo.callbackIds = new Map();
+		soundInfo.callbackIds.set("end", callbackId);
+	}
+	
+	static playMultipleSoundsLocally(playlistId, soundIds, seed = null){
+		if(!soundIds || soundIds.length == 0) return;
+		let playlist = game.playlists.get(playlistId)
+		if(!playlist) return;
+		if(playlist.mode != CONST.PLAYLIST_MODES.SIMULTANEOUS) return;
+		
+		let oldSoundStates = new Map()
+		let newSounds = soundIds.map(soundId => {
+			if(!MusicPermissions._user_locals_known.get(playlistId)?.get(soundId)){
+				oldSoundStates.set(soundId, {playing: playlist.sounds.get(soundId).playing, paused: playlist.sounds.get(soundId).pausedTime})
+			}
+			return {_id: soundId, playing: true}
+		});
+		playlist_change = {_id: playlistId, playing: true, sounds: newSounds}
+		if(seed) playlist_change.seed = seed;
+		
+		MusicPermissions._local_update(playlist_change);
+		
+		soundIds.forEach(soundId => {
+			let local_sound_info = MusicPermissions._user_locals_known.get(playlistId)?.get(soundId)
+			if(local_sound_info){
+				local_sound_info.playing = true;
+			} else {
+				MusicPermissions._add_sound_locally(playlistId, soundId, {playing: true, paused: oldSoundStates.get(soundId).paused}, oldSoundStates.get(soundId));
+			}
+			MusicPermissions._attach_play_sound_callback(playlistId, soundId);
+		});
+	}
+
+	static playSoundLocally(playlistId, soundId, seed = null){
+		let playlist = game.playlists.get(playlistId)
+		if(!playlist) return;
+		
+		let newSounds = [];
+		
+		if ( [CONST.PLAYLIST_MODES.SEQUENTIAL, CONST.PLAYLIST_MODES.SHUFFLE].includes(playlist.mode) ){
+			let localPlaylistInfo = MusicPermissions._user_locals_known.get(game.userId)?.get(playlistId)
+			//These modes can only have one sound playing at a time. End all currently playing sounds.
+			playlist.sounds.forEach(playlistSound => {
+				if(playlistSound.playing){
+					if(playlistSound.id != soundId){
+						newSounds.push({_id: playlistSound.id, playing: false, pausedTime: undefined})
+					}
+					
+					let localInfo = localPlaylistInfo?.get(playlistSound.id);
+					if(localInfo){
+						MusicPermissions._rm_local_callbacks(localInfo)
+						localInfo.playing = false;
+					} else {
+						MusicPermissions._add_sound_locally(playlistId, playlistSound.id, {playing: false, paused: undefined}, {playing: true, paused: undefined})
+					}
+				}
+			});
+		}
+		
+		newSounds.push({_id: soundId, playing: true});
+		let info = MusicPermissions._user_locals_known.get(game.userId)?.get(playlistId)?.localPlaylistInfo?.get(SoundId)
+		if(info){
+			info.playing = true
+			info.paused = undefined;
+		} else {
+			let playlistSound = playlist.sounds.get(soundId)
+			MusicPermissions._add_sound_locally(playlistId, soundId, {playing: true, paused: playlistSound.pausedTime}, {playing: playlistSound.playing, paused: playlistSound.pausedTime})
+		}
+		
+		let playlist_change = {_id: playlistId, playing: true, sounds: newSounds}
+		if(seed != null){
+			playlist_change.seed = seed;
+		}
+		
+		MusicPermissions._local_update(playlist_change);
+
+		MusicPermissions._attach_play_sound_callback(playlistId, soundId);
+	}
+	
+	static stopSoundLocally(playlistId, soundId){
+		return MusicPermissons.stopMultipleSoundsLocally(playlistId, [soundId]);
+	}
+	
+	static stopMultipleSoundsLocally(playlistId, soundIds, playlistStop = false){
+		if(!soundIds || soundIds.length == 0) return;
+		let playlist = game.playlists.get(playlistId)
+		if(!playlist) return;
+		
+		let my_locals = MusicPermissions._user_locals_known.get(game.userId)
+		
+		
+		soundIds.forEach(soundId => {
+			let info = my_locals?.get(playlistId)?.get(soundId)
+			if(info){
+				MusicPermissions._rm_local_callbacks(info)
+				info.playing = false;
+				if(!playlistStop) info.paused = undefined;
+			} else {
+				let sound = playlist.sounds.get(soundId)
+				let pausedInfo = playlistStop ? sound.pausedTime : undefined;
+				MusicPermissions._add_sound_locally(playlistId, soundId, {playing: false, paused: pausedInfo}, {playing: sound.playing, paused: sound.pausedTime});
+			}
+		})
+		
+		let playing = false;
+		for(const [playlistSoundId, playlistSound] in playlist.sounds){
+			if(!soundIds.includes(playlistSoundId) && playlistSound.playing){
+				playing = true;
+				break;
+			}
+		}
+		
+		let soundChanges = soundIds.map( soundId => { return{_id: soundId, playing: false}})
+		if(!playlistStop) soundChanges.forEach(soundChange => soundChange.pausedTime = undefined);
+		
+		MusicPermissions._local_update({_id: playlistId, playing: playing, sounds: soundChanges})
+	}
+	
+	static pauseMultipleSoundsLocally(playlistId, soundIds){
+		if(!soundIds || soundIds.length == 0) return;
+		let playlist = game.playlists.get(playlistId)
+		let playlistSounds = playlist?.sounds
+		if(!playlistSounds) return;
+		
+		let playlistInfo = MusicPermissions._user_locals_known.get(game.userId)?.get(playlistId)
+		soundIds.forEach(soundId => {
+			let info = playlistInfo?.get(soundId)
+			let sound = playlistSounds.get(soundId);
+			if(!sound) return;
+			
+			if(info){
+				MusicPermissions._rm_local_callbacks(info)
+				info.playing = false;
+				info.paused = sound.sound.currentTime;
+			} else {
+				let sound = playlist.sounds.get(soundId)
+				MusicPermissions._add_sound_locally(playlistId, soundId, {playing: false, paused: sound.sound.currentTime}, {playing: sound.playing, paused: sound.data.pausedTime});
+			}
+		})
+		
+		let playing = false;
+		playlistSounds.find(playlistSound =>{
+			if(!soundIds.includes(playlistSound.id) && (playlistSound.playing || playlistSound.pausedTime)){
+				playing = true;
+				return true;
+			}
+		});
+		
+		let changes = soundIds.filter(soundId => playlistSounds.get(soundId)?.playing);
+		changes = changes.map(soundId => {return {_id: soundId, playing: false, pausedTime: playlistSounds.get(soundId).sound.currentTime}})
+		
+		MusicPermissions._local_update({_id: playlistId, playing: playing || changes.length > 0, sounds: changes})
+	}
+	
+	static pauseSoundLocally(playlistId, soundId){
+		return MusicPermissions.pauseMultipleSoundsLocally(playlistId, [soundId]);
+	}
+	
+	static playPlaylistLocally(playlistId){
+		let playlist = game.playlists.get(playlistId);
+		if(!playlist) return;
+
+		//Currently foundry doesn't support playing a playlist in simultaneous (soundboard) mode, so for consistency we won't here either.		
+		if ( !([CONST.PLAYLIST_MODES.SEQUENTIAL, CONST.PLAYLIST_MODES.SHUFFLE].includes(this.mode)) ) return;
+
+		const paused = playlist.sounds.find(s => s.data.pausedTime);
+        const nextId = paused?.id || playlist.playbackOrder[0];
+		MusicPermissions.playSoundLocally(playlistId, nextId);
+	}
+	
+	static stopPlaylistLocally(playlistId){
+		let playlist = game.playlists.get(playlistId)
+		if(!playlist) return;
+		
+		let soundIds = playlist.sounds.map(sound => sound.id)
+		MusicPermissions.stopMultipleSoundsLocally(playlistId, soundIds, true)
+	}
+	
+	//returns {_id:playlistId, playing: playlist.playing, sounds = [_id: soundId, playing: sound.playing, pausedTime: sound.pausedTime]}
+	//pausedTime is a best-effort guess, to better synchronize it'd be best to stop/play instead of playing from pause.
+	static getPlaylistGlobalState(playlistId){
+		let playlist = game.playlists.get(playlistId)
+		if(!playlist) return;
+		
+		let state = {_id: playlistId, playing: false, sounds: []};
+		
+		let myLocal = MusicPermissions._user_locals_known.get(game.userID)?.get(playlistId)
+		playlist.sounds.forEach(sound => {
+			let info = myLocal?.get(sound.id);
+			if(info){
+				state.sounds.push({playing: info.global.playing, pausedTime: info.global.paused})
+				if(info.global.playing) state.playing = true;
+			} else {
+				state.sounds.push({playing: sound.playing, pausedTime: sound.pausedTime})
+				if(sound.playing) state.playing = true;
+			}
+		});
+		return state;
+	}
+	
+	//Based on local info, not asking the user. May be very slightly old info, though pausedTime specifically may be off a bit more (though the truthiness of it should be accurate).
+	//Try MusicPermissions.updateLocalInfos to force everyone to update eachother's local information if you find yourself having issues. Shouldn't be needed for typical use though.
+	static getPlaylistLocalState(playlistId, userId){
+		let playlist = game.playlists.get(playlistId);
+		if(!playlist) return;
+		
+		globalState = MusicPermissions.getPlaylistGlobalState(playlistId);
+		
+		let userInfo = MusicPermissions._user_locals_known.get(userId)?.get(playlistId);
+		if(!userInfo) return globalState;
+		for( [soundId, info] in userInfo ){
+			let idx = globalState.sounds.findIndex(sound => sound._id == soundId);
+			if(idx == -1) continue;
+			let globalInfo = globalState.sounds[idx];
+			globalInfo.playing = info.playing;
+			globalInfo.pausedTime = info.paused;
+		}
+		return globalState
+	}
+	
+	static sendRemoteForceNotif(playlistId, workers){
+		game.socket.emit("module.music-permissions", {action: "force-notif", target: playlistId, worker: workers});
+		
+		if(workers.includes("all") || workers.includes(game.userId)) MusicPermissions._force_next_reqs.push({playlistId: playlistId, userId: game.userId});
+	}
+	
+	//Requests that userIds broadcast their local info to everyone. "all" just have everyone update eachother.
+	static updateLocalInfos(userIds = ["all"]){
+		game.socket.emit("module.music-permissions", {action: "update-local-info", worker: userIds});
+	}
+	
+	static restorePlaylistToLocal(playlistId, second_run = false){
+		let playlist = game.playlists.get(playlistId)
+		if(!playlist) return
+		
+		let isPlaying = false;
+		let soundChanges = []
+		let realSoundChanges = []
+		let localPlaylist = MusicPermissions._user_locals_known.get(game.userId)?.get(playlist.id);
+		playlist.sounds.forEach(sound => {
+			if(sound.pausedTime != sound.sound.pausedTime || sound.playing != sound.sound.playing){
+				soundChanges.push({_id: sound.id, playing: sound.sound.playing, pausedTime: sound.sound.pausedTime})
+			}
+			if(sound.sound.playing) isPlaying = true
+			
+			let localSound = localPlaylist?.get(sound.id)
+			if(!localSound) return;
+			if(localSound.pauseTime != sound.sound.pausedTime || localSound.playing != sound.sound.playing){
+				if(!MusicPermissions._caught_interleaving){
+					console.log("MusicPermissions: Warning, found a sound with a different state than our local changes suggest. Please report to the github!")
+					console.log("MusicPermissions: Bad state on playlist: \"" + playlistId + "\" sound: \"" + sound.id + "\". Dumping status below:");
+					console.log(game.playlists)
+					console.log(MusicPermissions._user_locals_known.get(game.userId))
+				}
+				realSoundChanges.push({_id: sound.id, playing: localSound.playing, pausedTime: localSound.paused});
+			}
+		});
+		let doRender = MusicPermissions._render_on_local_updates; //Don't render after this update if the caller requested so.
+		let isReal = false; //This update isn't "real", ie we don't need to change the underlying sound state, just the playlist/playlistSound status.
+		MusicPermissions._local_update({_id: playlistId, playing: isPlaying, sounds: soundChanges}, doRender, isReal, second_run)
+		
+		if(realSoundChanges.length > 0){
+			isReal = true; //These changes need to be propogated to the underlying sound states
+			MusicPermissions._local_update({_id: playlistId, playing: isPlaying, sounds: realSoundChanges}, doRender, isReal, second_run)
+		}
+		
+		if(MusicPermissions._caught_interleaving) MusicPermissions._caught_interleaving = false;
+	}
+	
+	static debugRestorePlaylistToCurrent(playlistId){
+		let playlist = game.playlists.get(playlistId)
+		if(!playlist) return
+		
+		playlist.sounds.forEach(sound =>{
+			sound.sync();
+		});
+		
+		ui["playlists"].render(true)
+	}
+	
+	static _handle_remote_change(playlist, change, userId, playlistSound = false){
+		//Since the update wasn't local, no changes were made to the actual playing sounds
+		//So if they should have been, we just run the change again and update our internal stuff.
+		//We need to undo the changes in the playlist info by formatting and sending an undo change, or we 
+		//	end up with changes not being applied to the underlying sounds.
+		if(playlistSound){
+			//This is from a PlaylistSound update, so we'll reform the change to play nicely.
+			let playlistSound = playlist;
+			playlist = playlistSound.parent
+			
+			let playlistSoundChange = change;
+			change = {_id: playlist.id, sounds: [playlistSoundChange]}
+		}
+		
+		MusicPermissions.restorePlaylistToLocal(playlist.id);
+		
+		if(change.sounds.length < 1){
+			Console.log("Music Permissions: Warning, got playlist update w/ no sound info. Weird.")
+			return;
+		}
+		
+		let removed_one = false; //Only remove one if we have had multiple requests to force.
+		MusicPermissions._force_next_reqs = MusicPermissions._force_next_reqs.filter(toForce => {
+			if(!removed_one && toForce.playlistId == playlist.id && toForce.userId == userId){
+				removed_one = true;
+				return false;
+			}
+			return true;
+		})
+		
+		if(removed_one){
+			//This update should be forced through.
+			if([CONST.PLAYLIST_MODES.SEQUENTIAL, CONST.PLAYLIST_MODES.SHUFFLE].includes(playlist.mode)){
+				//Only one thing should play at a time, so we accept all changes suggested. Easy!
+				let nowPlaying = change.sounds.filter(soundChange => {return soundChange.playing == true});
+				if(nowPlaying.length > 0) {
+					if(nowPlaying.length > 1) console.log("MusicPermissions: Warning, got remote request to play multiple songs on sequential/shuffle playlist. Only playing first.");
+					MusicPermissions.playSoundLocally(playlist.id, nowPlaying[0]._id)
+					MusicPermissions._del_playlist_locally(playlist.id);
+				} else {
+					let attempted_changes = change.sounds.map(sChange => sChange._id)
+					let changed_sounds = playlist.sounds.filter(sound => sound.playing).map(sound => sound.id).filter(soundId => attempted_changes.includes(soundId));
+					if(change.sounds[0].pausedTime){
+						//Pause any song locally playing. Should just be one for this playlist mode, but just in case handle the case of multiple.
+						MusicPermissions.pauseMultipleSoundsLocally(playlist.id, changed_sounds)
+					} else {
+						//stop any song locally playing or paused. Should just be one for this playlist mode, but just in case handle the case of multiple.
+						MusicPermissions.stopMultipleSoundsLocally(playlist.id, changed_sounds)
+					}
+					let localPlaylist = MusicPermissions._user_locals_known.get(game.userId)?.get(playlist.id);
+					MusicPermissions._del_multiple_sounds_locally(playlist.id, changed_sounds) //Remove from locally-changed anything that we just updated to match global.
+				}
+			} else {
+				//Apply all changes, no worries.
+				MusicPermissions._local_update(change);
+				
+				let localPlaylist = MusicPermissions._user_locals_known.get(game.userId)?.get(playlist.id)
+				change.sounds.map(sound => sound.soundId).forEach(soundId => localPlaylist?.delete(soundId));
+			}
+		} else {
+			//This is an update that shouldn't be forced through.
+			//Should just be a play update, those are the only auto ones?
+			if(!MusicPermissions._user_locals_known.get(game.userId)?.get(playlist.id)){
+				//Only handle the play if we don't have any local changes to playlist.
+				MusicPermissions._local_update(change)
+				MusicPermissions._del_playlist_locally(playlist.id);
+			} //TODO: else, update info.global for any infos we have that we're ignoring changes to.
+			
+		}
+	}
+}
