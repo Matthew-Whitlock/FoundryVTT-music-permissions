@@ -1920,21 +1920,19 @@ function handleSocketEvent(data, src){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
 		let playlist = game.playlists.get(data.target);
 		if(!playlist) return "Internal error: Cannot find playlist!";
-		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to play this playlist!";
-		
-		
+		if((playlist.data.permission[src]??playlist.data.permission["default"]) < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to play this playlist!";
 		playlist.playAll();
 	} else if(data.action == "playlist-stopAll"){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
 		let playlist = game.playlists.get(data.target);
 		if(!playlist) return "Internal error: Cannot find playlist!";
-		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return"You do not have permission to stop this playlist!";
+		if((playlist.data.permission[src]??playlist.data.permission["default"]) < game.settings.get("music-permissions","min-control-perm")) return"You do not have permission to stop this playlist!";
 		playlist.stopAll();
 	} else if(data.action == "playlist-skip"){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
 		let playlist = game.playlists.get(data.target);
 		if(!playlist) return "Internal error: Cannot find playlist!";
-		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return"You do not have permission to control this playlist!";
+		if((playlist.data.permission[src]??playlist.data.permission["default"]) < game.settings.get("music-permissions","min-control-perm")) return"You do not have permission to control this playlist!";
 		if(((playlist.data.permission[src]??playlist.data.permission["default"]) == 1) && !game.settings.get("music-permissions","limited-vision"))
 			return "You cannot skip in playlists whose songs you cannot see!"
 		playlist.playNext(undefined, {direction: data.data})
@@ -1942,7 +1940,7 @@ function handleSocketEvent(data, src){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
 		let playlist = game.playlists.get(data.playlist);
 		if(!playlist) return "Internal error: Cannot find playlist!";
-		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to play from this playlist!";
+		if((playlist.data.permission[src]??playlist.data.permission["default"]) < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to play from this playlist!";
 		let sound = playlist.sounds.get(data.target)
 		if(!sound) return "Internal error: Cannot find sound!"
 		playlist.playSound(sound);
@@ -1950,7 +1948,7 @@ function handleSocketEvent(data, src){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
 		let playlist = game.playlists.get(data.playlist);
 		if(!playlist) return "Internal error: Cannot find playlist!";
-		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to stop sounds in this playlist!";
+		if((playlist.data.permission[src]??playlist.data.permission["default"]) < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to stop sounds in this playlist!";
 		let sound = playlist.sounds.get(data.target)
 		if(!sound) return "Internal error: Cannot find sound!"
 		playlist.stopSound(sound);
@@ -1958,7 +1956,7 @@ function handleSocketEvent(data, src){
 		if(!CustSidebarDirectory.haveControlPerms(src)) return "You do not have permission to control playback!";
 		let playlist = game.playlists.get(data.playlist);
 		if(!playlist) return "Internal error: Cannot find playlist!";
-		if(playlist.data.permission[src]??playlist.data.permission["default"] < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to pause sounds in this playlist!";
+		if((playlist.data.permission[src]??playlist.data.permission["default"]) < game.settings.get("music-permissions","min-control-perm")) return "You do not have permission to pause sounds in this playlist!";
 		let sound = playlist.sounds.get(data.target)
 		if(!sound) return "Internal error: Cannot find sound!"
 		sound.update({playing: false, pausedTime: sound.sound.currentTime});
