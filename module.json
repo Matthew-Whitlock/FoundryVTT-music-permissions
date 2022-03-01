@@ -13,7 +13,7 @@
             "discord": "KnightlyDuckling#2313"
         }
     ],
-    "scripts": [
+    "esmodules": [
         "scripts/music-permissions.js"
     ],
     "url": "https://github.com/Matthew-Whitlock/FoundryVTT-music-permissions",

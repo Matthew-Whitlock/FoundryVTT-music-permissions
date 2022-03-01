@@ -254,6 +254,115 @@ class PlaylistDirectory extends SidebarDirectory {
   /* -------------------------------------------- */
   /*  Event Listeners and Handlers                */
   /* -------------------------------------------- */
+  
+	_onSelectedGroupChange(event){
+		console.log("Selected new group in dropdown!")
+	}
+  
+	_onNewGroup(event){
+		let dialog_content = `<div>Name: <input type="text" name="groupName"></div><hr/>`
+		dialog_content +=`<form><div class="form-group"><label>Users: </label><select multiple name="users" id="users">`
+		game.users.forEach(function(user){
+		  dialog_content+="\n<option value=" + user.id + ">"+ (user.isGM ? user.name : user.character.name) +"</option>"
+		});
+		dialog_content+=`</select></div><div>(Control-click to select multiple)</div></form>`
+		
+		let applyChanges = false;
+		new Dialog({
+			title: `New Local Sound Control Group`,
+			content: dialog_content,
+			buttons: {
+				yes: {
+					icon: "<i class='fas fa-check'></i>",
+					label: `Confirm`,
+					callback: () => applyChanges = true
+				},
+				no: {
+					icon: "<i class='fas fa-times'></i>",
+					label: `Cancel`,
+					callback: () => applyChanges = false
+				},
+			},
+			default: "yes",
+			close: (html) => {
+				if (applyChanges) {
+					let groupName = html.find('[name="groupName"]')[0].value
+					console.log(groupName)
+					
+					let userIds = [];
+					for(let opt of html.find(`[name="users"]`)[0].selectedOptions){
+						userIds.push(opt.value)
+					}
+					if(userIds.length < 1) {
+						ui.notifications.error("Cannot create a group with no users.")
+						return;
+					}
+					
+					if(!groupName || groupName == ""){
+						ui.notifications.error("You must choose a name for the group.");
+						return;
+					}
+					if(groupName == "Global"){
+						ui.notifications.error("Group \"Global\" already exists.");
+						return;
+					}
+					let matchingGroup = Settings.local_groups().find(group => {
+						return group.name == groupName
+					});
+					if(matchingGroup){
+						ui.notifications.error("Group \"" + groupName + "\" already exists.");
+						return;
+					}
+					matchingGroup = game.users.find(user => {
+						return groupName == (user.isGM ? user.name : user.character.name);
+					});
+					if(matchingGroup){
+						ui.notifications.error("Group \"" + groupName + "\" already exists.");
+						return;
+					}
+					
+					//Validated all inputs! Woooo. Add the group.
+					let local_groups = Settings.local_groups();
+					local_groups.push({name: groupName, userIds: userIds});
+					Settings.local_groups(local_groups);
+					
+					this.render(true);
+					console.log(this);
+					
+					return true; //Allow to close
+				}
+			}
+		}, {jQuery: true}).render(true)
+		
+	}
+
+	_onDeleteGroup(event){
+		let btn = event.currentTarget;
+		let sel = btn.parentNode.lastChild.firstChild.firstChild.firstChild;
+		
+		let groupName = sel.options[sel.selectedIndex].text;
+		
+		let idx = Settings.local_groups().findIndex( group => {
+			return group.name == groupName;
+		});
+		
+		if(idx == -1){
+			ui.notifications.error("You can only delete created groups.");
+		} else {
+			
+			Dialog.confirm({
+				title: "Delete local sound group \"" + groupName + "\"?",
+				content: "<p>This is permanent.<p>",
+				yes: () =>{
+					let localGroups = Settings.local_groups()
+					localGroups.splice(idx, 1)
+					Settings.local_groups(localGroups);
+				},
+				no: () => {},
+				defaultYes: true
+			})
+		}
+	}
 
   /** @override */
   activateListeners(html) {
@@ -321,39 +430,61 @@ class PlaylistDirectory extends SidebarDirectory {
 	}
 	
 	if(Settings.can_local_control()){
-		html.find(".directory-header").each(function(num, div){
-			let newDiv= "<div class=\"form-group\"><form><div><span><select name=\"sound groups\">"
-			Globals.local.soundGroups.forEach(group => {
+		html.find(".directory-header").each((num, div) => {
+			
+			let newDiv= "<div class=\"form-group\">"
+			
+			//New group button
+			newDiv += "<button><span><i class=\"fas fa-plus\"></i></span></button>"
+			
+			//Delete group button
+			newDiv += "<button><span><i class=\"fas fa-minus\"></i></span></button>"
+			
+			newDiv += "<form><div><span><select name=\"sound groups\">"
+			newDiv += "<option value=\"all\">Global</option>";
+			newDiv += "<optgroup label=\"Your groups\">"
+			Settings.local_groups().forEach(group => {
 				newDiv += "<option value=\""+group.userIds.toString()+"\">" + group.name + "</option>";
 			});
-			newDiv += "</select></span></div></form>"
+			newDiv += "</optgroup><optgroup label=\"Users\">"
+			game.users.forEach( user => {
+				//if(!user.active) return;
+				newDiv += "<option value=\""+user.id+"\">" + (user.isGM ? user.name : user.character.name) + "</option>";
+			});
+			newDiv += "</optgroup></select></span></div></form>"
 			
-			newDiv += "<button><i class=\"fas fa-plus\"></i> Group</button></div>"
+			newDiv += "</div>"
+			
+			
 			
 			div.innerHTML += newDiv;
 			
 			newDiv = div.getElementsByTagName("select")[0]
-			newDiv.style.width = "calc(100% - 80px)"
-			newDiv.style.float = "left"
+			newDiv.style.width = "calc(100% - 40px)"
+			newDiv.style.float = "right"
 			newDiv.style.height = "26px"
 			newDiv.style.backgroundColor = "#f0f0e0"
-			newDiv.style.marginHeight = "5px"
-			newDiv.onchange = function(event){
-				console.log("Got select change event: " + event);
-			}
+			newDiv.style.margin = "1px"
+			newDiv.onchange = this._onSelectedGroupChange.bind(this)
 			
-			newDiv = newDiv.parentNode.parentNode.parentNode.parentNode.lastChild
-			newDiv.style.width = "70px"
-			newDiv.style.margin = "0px"
+			newDiv = newDiv.parentNode.parentNode.parentNode.parentNode.childNodes[0]
+			newDiv.style.width = "17px"
+			newDiv.style.margin = "1px"
 			newDiv.style.padding = "0px"
 			newDiv.style.height = "26px"
 			newDiv.style.fontSize = "var(--font-size-12)"
-			newDiv.style.float = "right"
-			newDiv.onclick = function(event){
-				console.log("Got new group click : " + event);
-			}
+			newDiv.style.float = "left"
+			newDiv.onclick = this._onNewGroup.bind(this)
 			
-			console.dir(newDiv);
+			newDiv = newDiv.parentNode.childNodes[1]
+			newDiv.style.width = "17px"
+			newDiv.style.margin = "1px"
+			newDiv.style.padding = "0px"
+			newDiv.style.height = "26px"
+			newDiv.style.fontSize = "var(--font-size-12)"
+			newDiv.style.float = "left"
+			newDiv.onclick = this._onDeleteGroup.bind(this)
+			
 		});
 	}
 	
@@ -400,7 +531,7 @@ class PlaylistDirectory extends SidebarDirectory {
   }
 
   /* -------------------------------------------- */
-
+	
   /**
    * Handle global volume change for the playlist sidebar
    * @param {MouseEvent} event   The initial click event

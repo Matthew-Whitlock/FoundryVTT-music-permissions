@@ -22,9 +22,7 @@ class Globals {
 		
 		//{id, actions}
 		_socket_handlers: [],
-		_event_handlers: [],
-		
-		soundGroups: [{name: "Global", userIds: ["all"]}, {name: "two", userIds: ["all"]}]
+		_event_handlers: []
 	}
 }
 

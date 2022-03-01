@@ -79,6 +79,18 @@ class Settings {
 				ui["playlists"].render(true);
 			}
 		});
+		
+		game.settings.register("music-permissions", "local_groups",{
+			name: "",
+			hint: "",
+			scope: "world",
+			config: false,
+			type: Array,
+			default: [],
+			onChange: value => {
+				ui["playlists"].render(true);
+			}
+		});
 
 		//Wrapped into edit permissions now, keeping for posterity or something.
 		/*game.settings.register("music-permissions", "create-perm",{
@@ -117,6 +129,11 @@ class Settings {
 	
 	static edit_perm(){
 		return game.settings.get("music-permissions", "edit-perm");
+	}
+	
+	static local_groups(newVal = null){
+		if(!newVal) return game.settings.get("music-permissions", "local_groups");
+		game.settings.set("music-permissions", "local_groups", newVal);
 	}
 	
 	static can_edit(userId=game.userId, obj = null){
