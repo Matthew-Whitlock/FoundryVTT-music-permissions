@@ -2,10 +2,10 @@
     "name": "music-permissions",
     "title": "Music Permissions",
     "description": "Provides configurable permissions for playing, editing, and creating playlists.",
-    "version": "2.0.0",
+    "version": "2.0.2",
     "library": false,
     "minimumCoreVersion": "9",
-    "compatibleCoreVersion": "9.245",
+    "compatibleCoreVersion": "9.269",
     "authors": [
         {
             "name": "Matthew Whitlock",
