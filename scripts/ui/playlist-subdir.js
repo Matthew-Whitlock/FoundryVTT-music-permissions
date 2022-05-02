@@ -188,7 +188,7 @@ class PlaylistDirectory extends SidebarDirectory {
       }
       sounds.push(s);
     }
-    p.sounds = sounds.sort(playlist._sortSounds.bind(playlist));
+    p.sounds = sounds;
     return p;
   }
 
@@ -488,7 +488,7 @@ class PlaylistDirectory extends SidebarDirectory {
 		});
 	}
 	
-	super.activateListeners(html);
+    super.activateListeners(html);
 
     // Volume sliders
     html.find('.global-volume-slider').change(this._onGlobalVolume.bind(this));
@@ -531,7 +531,7 @@ class PlaylistDirectory extends SidebarDirectory {
   }
 
   /* -------------------------------------------- */
-	
+
   /**
    * Handle global volume change for the playlist sidebar
    * @param {MouseEvent} event   The initial click event
@@ -623,7 +623,7 @@ class PlaylistDirectory extends SidebarDirectory {
   _onPlaylistPlay(event, playing) {
     const li = event.currentTarget.closest(".playlist");
     const playlist = game.playlists.get(li.dataset.documentId);
-	const do_remote = (!game.user.isGM)
+    const do_remote = (!game.user.isGM)
     if ( playing ){
 		if(do_remote) return remoteAction("playlist-playAll", "GM", {target: li.dataset.documentId})
 		LocalSound.sendRemoteForceNotif(playlist.id, "all")
@@ -646,18 +646,16 @@ class PlaylistDirectory extends SidebarDirectory {
   _onPlaylistSkip(event, action) {
     const li = event.currentTarget.closest(".playlist");
     const playlist = game.playlists.get(li.dataset.documentId);
-	
-	let direction = action === "playlist-forward" ? 1 : -1
-	
-	const do_remote = (!game.user.isGM)
-	if(do_remote) return sendRemoteRequest({
-		action: "playlist-skip",
-		target: li.dataset.documentId,
-		data: direction
-	});
     
-	LocalSound.sendRemoteForceNotif(playlist.id, "all")
-	return playlist.playNext(undefined, {direction: direction});
+    const do_remote = (!game.user.isGM)
+    if(do_remote) return sendRemoteRequest({
+	action: "playlist-skip",
+	target: li.dataset.documentId,
+	data: (action === "playlist-forward" ? 1 : -1)
+    })
+    
+    LocalSound.sendRemoteForceNotif(playlist.id, "all")
+    return playlist.playNext(undefined, {direction: action === "playlist-forward" ? 1 : -1});
   }
 
   /* -------------------------------------------- */
@@ -699,20 +697,20 @@ class PlaylistDirectory extends SidebarDirectory {
     const li = event.currentTarget.closest(".sound");
     const playlist = game.playlists.get(li.dataset.playlistId);
     const sound = playlist.sounds.get(li.dataset.soundId);
-	const do_remote = (!game.user.isGM)
+    const do_remote = (!game.user.isGM)
     switch ( action ) {
       case "sound-play":
-		if(do_remote) return remoteAction("sound-play", "GM", {target: li.dataset.soundId, playlist: li.dataset.playlistId})
-        LocalSound.sendRemoteForceNotif(playlist.id, "all")
-		return playlist.playSound(sound);
+	if(do_remote) return remoteAction("sound-play", "GM", {target: li.dataset.soundId, playlist: li.dataset.playlistId})
+	LocalSound.sendRemoteForceNotif(playlist.id, "all")
+	return playlist.playSound(sound);
       case "sound-pause":
-	    if(do_remote) return remoteAction("sound-pause", "GM", {target: li.dataset.soundId, playlist: li.dataset.playlistId})
+	if(do_remote) return remoteAction("sound-pause", "GM", {target: li.dataset.soundId, playlist: li.dataset.playlistId})
         LocalSound.sendRemoteForceNotif(playlist.id, "all")
-		return sound.update({playing: false, pausedTime: sound.sound.currentTime});
+	return sound.update({playing: false, pausedTime: sound.sound.currentTime});
       case "sound-stop":
-		if(do_remote) return remoteAction("sound-stop", "GM", {target: li.dataset.soundId, playlist: li.dataset.playlistId})
-		LocalSound.sendRemoteForceNotif(playlist.id, "all")
-		return playlist.stopSound(sound);
+	if(do_remote) return remoteAction("sound-stop", "GM", {target: li.dataset.soundId, playlist: li.dataset.playlistId})
+	LocalSound.sendRemoteForceNotif(playlist.id, "all")
+	return playlist.stopSound(sound);
     }
   }
 
@@ -874,6 +872,7 @@ class PlaylistDirectory extends SidebarDirectory {
    * @private
    */
   _formatTimestamp(seconds) {
+    if ( seconds === Infinity ) return "∞";
     seconds = seconds ?? 0;
     let minutes = Math.floor(seconds / 60);
     seconds = Math.round(seconds % 60);
@@ -900,6 +899,7 @@ class PlaylistDirectory extends SidebarDirectory {
   /** @inheritdoc */
   _getFolderContextOptions() {
     const options = super._getFolderContextOptions();
+    //options.findSplice(o => o.name === "PERMISSION.Configure");
     return options;
   }
 
@@ -908,12 +908,13 @@ class PlaylistDirectory extends SidebarDirectory {
   /** @inheritdoc */
   _getEntryContextOptions() {
     const options = super._getEntryContextOptions();
+    //options.findSplice(o => o.name === "PERMISSION.Configure");
     options.unshift({
       name: "PLAYLIST.Edit",
       icon: '<i class="fas fa-edit"></i>',
 	  condition: li => {
-		  const playlist = game.playlists.get(li.data("document-id"));
-		  return Settings.can_edit(game.userId, playlist);
+	      const playlist = game.playlists.get(li.data("document-id"));
+	      return Settings.can_edit(game.userId, playlist);
 	  },
       callback: li => {
         const playlist = game.playlists.get(li.data("document-id"));
@@ -994,18 +995,14 @@ class PlaylistDirectory extends SidebarDirectory {
 
   /** @inheritdoc */
   _onDrop(event) {
-    let data;
-    try {
-      data = JSON.parse(event.dataTransfer.getData("text/plain"));
-    } catch(err) {
-      return false;
-    }
-
+    const data = TextEditor.getDragEventData(event);
     if ( data.type !== "PlaylistSound" ) return super._onDrop(event);
+
+    // Reference the target playlist and sound elements
     const target = event.target.closest(".sound, .playlist");
     if ( !target ) return false;
     const playlist = game.playlists.get(data.playlistId);
-	if(!Settings.can_edit(game.userId, playlist)) return false;
+    if(!Settings.can_edit(game.userId, playlist)) return false;
     const sound = playlist.sounds.get(data.soundId);
     const otherPlaylistId = target.dataset.documentId || target.dataset.playlistId;
 

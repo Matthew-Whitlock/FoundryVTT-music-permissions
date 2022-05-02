@@ -144,8 +144,8 @@ class SidebarDirectory extends SidebarTab {
     for ( let i = CONST.FOLDER_MAX_DEPTH - 1; i >= 0; i-- ) {
       depths[i] = depths[i].reduce((arr, f) => {
         f.children = f.children.filter(c => {
-			return c.displayed || c.data?.description == game.userId
-		});
+	    return c.displayed || c.data?.description == game.userId
+	});
         if ( !f.displayed && f.data.description != game.userId) return arr;
         f.depth = i+1;
         arr.push(f);
@@ -209,7 +209,7 @@ class SidebarDirectory extends SidebarTab {
   /* -------------------------------------------- */
 
   /** @inheritdoc */
-  async _render(force, context={}) {
+	async _render(force, context={}) {
 
     // Only re-render the sidebar directory for certain types of updates
     const {action, data, documentType} = context;
@@ -236,6 +236,7 @@ class SidebarDirectory extends SidebarTab {
       documentCls: cls.documentName.toLowerCase(),
       tabName: cls.metadata.collection,
       sidebarIcon: cfg.sidebarIcon,
+      folderIcon: CONFIG.Folder.sidebarIcon,
       label: game.i18n.localize(cls.metadata.label),
       labelPlural: game.i18n.localize(cls.metadata.labelPlural),
       documentPartial: this.constructor.documentPartial,
@@ -377,13 +378,13 @@ class SidebarDirectory extends SidebarTab {
   async _onCreateDocument(event) {
     event.preventDefault();
     event.stopPropagation();
-	
     const button = event.currentTarget;
     const data = {folder: button.dataset.folder};
     const options = {width: 320, left: window.innerWidth - 630, top: button.offsetTop };
-    //return Playlist.createDialog(data, options);
+      //const cls = getDocumentClass(this.constructor.documentName);
+    //return cls.createDialog(data, options);
 	
-	const documentName = "Playlist";
+    const documentName = "Playlist";
     const types = game.system.documentTypes[documentName];
     const folders = game.folders.filter(f => (f.data.type === documentName) && f.displayed);
     const label = game.i18n.localize(Playlist.metadata.label);
@@ -414,10 +415,9 @@ class SidebarDirectory extends SidebarTab {
         const fd = new FormDataExtended(form);
         foundry.utils.mergeObject(data, fd.toObject(), {inplace: true});
         if ( !data.folder ) delete data["folder"];
-        if ( types.length === 1 ) data.type = types[0];
-		
-		if(game.user.isGM) return Playlist.create(data, {renderSheet: true});
-		else return remoteAction("playlist-create", "GM", {data: data});
+        if ( types.length === 1 ) data.type = types[0];		
+	if(game.user.isGM) return Playlist.create(data, {renderSheet: true});
+	else return remoteAction("playlist-create", "GM", {data: data});
       },
       rejectClose: false,
       options: options
@@ -437,28 +437,20 @@ class SidebarDirectory extends SidebarTab {
 	  const button = event.currentTarget;
     const parent = button.dataset.parentFolder;
     const data = {parent: parent ? parent : null, type: this.constructor.documentName};
-	
-	const options = {
-		top: button.offsetTop, 
-		left: window.innerWidth - 310 - FolderConfig.defaultOptions.width,
-	};
-	  
-	  
-	  
-	  if(game.user.isGM){
-		Folder.createDialog(data, options);
-	  } else {
-		const label = game.i18n.localize(Folder.metadata.label);
-		const folderData = foundry.utils.mergeObject({
-		  name: game.i18n.format("DOCUMENT.New", {type: label}),
-		  sorting: "a",
-		}, data);
-		const folder = new Folder(folderData);
-		folder.data.permission = {};
-		folder.data.permission[game.userId] = CONST.DOCUMENT_PERMISSION_LEVELS.OWNER;
-		return new RemoteFolderConfig(folder, options).render(true);
-	  }
-	  
+    const options = {top: button.offsetTop, left: window.innerWidth - 310 - FolderConfig.defaultOptions.width};
+    if(game.user.isGM){
+        Folder.createDialog(data, options);
+    } else {
+        const label = game.i18n.localize(Folder.metadata.label);
+	const folderData = foundry.utils.mergeObject({
+	          name: game.i18n.format("DOCUMENT.New", {type: label}),
+	          sorting: "a",
+	      }, data);
+	const folder = new Folder(folderData);
+	folder.data.permission = {};
+	folder.data.permission[game.userId] = CONST.DOCUMENT_PERMISSION_LEVELS.OWNER;
+	return new RemoteFolderConfig(folder, options).render(true);
+    }	  
   }
 
   /* -------------------------------------------- */
@@ -542,18 +534,8 @@ class SidebarDirectory extends SidebarTab {
   /** @override */
   _onDrop(event) {
     const cls = this.constructor.documentName;
-
-    // Try to extract the data
-    let data;
-    try {
-      data = JSON.parse(event.dataTransfer.getData('text/plain'));
-    }
-    catch (err) {
-      return false;
-    }
-
-    // Identify the drop target
-    const selector = this._dragDrop[0].dropSelector;
+    const data = TextEditor.getDragEventData(event);
+    if ( !data.type ) return;
     const target = event.target.closest(".directory-item") || null;
 
     // Call the drop handler
@@ -574,7 +556,7 @@ class SidebarDirectory extends SidebarTab {
    * @protected
    */
   async _handleDroppedDocument(target, data) {
-	
+
     // Determine the closest folder ID
     const closestFolder = target ? target.closest(".folder") : null;
     if ( closestFolder ) closestFolder.classList.remove("droptarget");
@@ -699,10 +681,10 @@ class SidebarDirectory extends SidebarTab {
           const folder = game.folders.get(li.dataset.folderId);
           const options = {top: li.offsetTop, left: window.innerWidth - 310 - FolderConfig.defaultOptions.width};
           if(game.user.isGM){
-			  new FolderConfig(folder, options).render(true);
-		  } else {
-			  new RemoteFolderConfig(folder, options).render(true);
-		  }
+	      new FolderConfig(folder, options).render(true);
+	  } else {
+	      new RemoteFolderConfig(folder, options).render(true);
+	  }
         }
       },
       {
@@ -771,8 +753,8 @@ class SidebarDirectory extends SidebarTab {
             title: `${game.i18n.localize("FOLDER.Remove")} ${folder.name}`,
             content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.localize("FOLDER.RemoveWarning")}</p>`,
             yes: () => {
-				if(game.user.isGM) folder.delete({deleteSubfolders: false, deleteContents: false})
-				else remoteAction("folder-remove", "GM", {target:folder.id});
+	                    if(game.user.isGM) folder.delete({deleteSubfolders: false, deleteContents: false})
+			    else remoteAction("folder-remove", "GM", {target:folder.id});
 			},
             options: {
               top: Math.min(li[0].offsetTop, window.innerHeight - 350),
@@ -785,18 +767,14 @@ class SidebarDirectory extends SidebarTab {
       {
         name: "FOLDER.Delete",
         icon: '<i class="fas fa-dumpster"></i>',
-        condition: (header) => {
-			return game.user.isGM
-		},
+        condition: game.user.isGM,
         callback: header => {
           const li = header.parent();
           const folder = game.folders.get(li.data("folderId"));
           return Dialog.confirm({
             title: `${game.i18n.localize("FOLDER.Delete")} ${folder.name}`,
             content: `<h4>${game.i18n.localize("AreYouSure")}</h4><p>${game.i18n.localize("FOLDER.DeleteWarning")}</p>`,
-            yes: () => {
-				folder.delete({deleteSubfolders: true, deleteContents: true})
-			},
+            yes: () => folder.delete({deleteSubfolders: true, deleteContents: true}),
             options: {
               top: Math.min(li[0].offsetTop, window.innerHeight - 350),
               left: window.innerWidth - 720,
