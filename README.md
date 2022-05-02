@@ -16,7 +16,7 @@ Via module settings, you can configure a minium role to be able to:
 
 ## Local-only playback changes
 
-### VERY EXPERIMENTAL
+### Note: Experimental
 
 There is a set of APIs (available through MusicPermissions.(API)) for changing playback for a single client.
 
