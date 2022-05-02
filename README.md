@@ -15,7 +15,7 @@ Via module settings, you can configure a minium role to be able to:
  * Limited viewers can see songs?: Controls if limited-permissions allows a player to see the playlist name only, or also the songs within.
 
 ## Local-only playback changes
-### VERY EXPERIMENTAL
+### Note: Experimental
 There is a set of APIs (available through MusicPermissions.(API)) for changing playback for a single client.
 Currently support is limited to changing your own client's settings, but that'll be fixed soon.
 Additionally, for now the roles setting for local control only serves as an on/off toggle. Set to disabled 
