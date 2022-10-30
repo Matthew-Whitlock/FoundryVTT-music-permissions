@@ -1,4 +1,4 @@
-import Globals from "../globals.js"
+import Globals from "./globals.js"
 
 //Replacement for Sound objs that prevents updates from remote sources,
 //so we can manually handle.

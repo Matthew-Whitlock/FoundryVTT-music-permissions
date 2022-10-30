@@ -35,7 +35,7 @@ class Settings {
 		});
 		
 		//Will be used if I set up a ui interface to the 
-		game.settings.register("music-permissions", "min-locals-role",{
+		/*game.settings.register("music-permissions", "min-locals-role",{
 			name: "Minimum local-playback permissions:",
 			hint: "What role is needed to allow a user to control people's local playback settings?",
 			scope: "world",
@@ -49,7 +49,7 @@ class Settings {
 				5: "Disabled"
 			},
 			default: 5
-		});
+		});*/
 		
 		game.settings.register("music-permissions", "min-control-perm",{
 			name: "Minimum control permission:",
@@ -62,7 +62,7 @@ class Settings {
 				2: "Observer",
 				3: "Owner"
 			},
-			default: 2,
+			default: 1,
 			onChange: value => {
 				ui["playlists"].render(true);
 			}
@@ -74,37 +74,19 @@ class Settings {
 			scope: "world",
 			config: true,
 			type: Boolean,
-			default: true,
+			default: false,
 			onChange: value => {
 				ui["playlists"].render(true);
 			}
 		});
 		
-		game.settings.register("music-permissions", "local_groups",{
+		/*game.settings.register("music-permissions", "local_groups",{
 			name: "",
 			hint: "",
 			scope: "world",
 			config: false,
 			type: Array,
 			default: [],
-			onChange: value => {
-				ui["playlists"].render(true);
-			}
-		});
-
-		//Wrapped into edit permissions now, keeping for posterity or something.
-		/*game.settings.register("music-permissions", "create-perm",{
-			name: "Create playlists:",
-			hint: "Warning, enabling this setting requires editing server files. See GitHub for info.",
-			scope: "world",
-			config: true,
-			type: Number,
-			choices: {
-				1: "All players",
-				2: "Trusted players",
-				3: "Assistant GMs"
-			},
-			default: "3",
 			onChange: value => {
 				ui["playlists"].render(true);
 			}
@@ -120,7 +102,7 @@ class Settings {
 	}
 	
 	static min_locals_role(){
-		return game.settings.get("music-permissions", "min-locals-role");
+		return 5; //game.settings.get("music-permissions", "min-locals-role");
 	}
 	
 	static playback_perm(){
@@ -150,7 +132,7 @@ class Settings {
 			return obj.getUserLevel(user) == CONST.DOCUMENT_PERMISSION_LEVELS.OWNER
 		}
 		if(obj instanceof Folder){
-			return folder.data.description == game.userId || game.users.get(userId).isGM
+			return (obj.description == userId) || game.users.get(userId).isGM
 		}
 		
 		console.log("MusicPermissions: Error, trying to edit something other than PlaylistSound/Playlist/Folder? " + typeof obj);
@@ -184,7 +166,7 @@ class Settings {
 	}
 	
 	static can_local_control(userId = game.userId){
-		return Settings.min_locals_role() <= game.users.get(userId).role
+		return false; //Settings.min_locals_role() <= game.users.get(userId).role
 	}
 }
 
