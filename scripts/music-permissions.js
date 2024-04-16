@@ -40,7 +40,8 @@ PlaylistSound.prototype.localUpdate = async function(data, config){
 PlaylistDirectory.prototype.oldData = PlaylistDirectory.prototype.getData;
 PlaylistDirectory.prototype.getData = async function (options){
 	let data = await this.oldData(options);
-	data.canCreate = Settings.can_create();
+	data.canCreateEntry = Settings.can_create();
+	data.canCreateFolder = Settings.can_create();
 	return data;
 }
 
@@ -79,7 +80,7 @@ PlaylistDirectory.prototype.activateListeners = function (html) {
 	if(game.user.isGM) return; //Already added for GMs
 
 
-	//We enable callbacks for everyone, just let css handle disabling 
+	//We enable callbacks for everyone, just let css handle disabling
 	//for those who can't use.
 	html.on("click", "a.sound-control", event => {
 	      event.preventDefault();
@@ -113,8 +114,8 @@ PlaylistDirectory.prototype.activateListeners = function (html) {
 
 //Fix playlist directory removing folder ownership config option.
 PlaylistDirectory.prototype._getFolderContextOptions = function () {
-	let opts = SidebarDirectory.prototype._getFolderContextOptions.call(this);
-	
+	let opts = DocumentDirectory.prototype._getFolderContextOptions.call(this);
+
 	//Allow users to edit and remove folder that they originally created.
 	opts.forEach(opt => {
 		if( ["FOLDER.Remove", "FOLDER.Edit"].includes(opt.name) ){
@@ -129,11 +130,11 @@ PlaylistDirectory.prototype._getFolderContextOptions = function () {
 	return opts;
 }
 
-//Fix playlist directory removing playlist ownership config option, 
+//Fix playlist directory removing playlist ownership config option,
 //allow users to manipulate playlists they originally created.
 PlaylistDirectory.prototype._oldEntryContextOptions = PlaylistDirectory.prototype._getEntryContextOptions;
 PlaylistDirectory.prototype._getEntryContextOptions = function() {
-	const options = SidebarDirectory.prototype._getEntryContextOptions.call(this);
+	const options = DocumentDirectory.prototype._getEntryContextOptions.call(this);
 
 	//Allow users to edit and delete f that they originally created.
 	options.forEach(opt => {
@@ -145,10 +146,10 @@ PlaylistDirectory.prototype._getEntryContextOptions = function() {
 			};
 		}
 	});
-	
+
 	//Now re-add anything that isn't in default options list by referencing the old function definition.
 	const oldOptions = this._oldEntryContextOptions()
-	
+
 	const newOptions = oldOptions.filter(oldOpt => !options.some(opt => oldOpt.name === opt.name))
 	options.unshift(...newOptions);
 
@@ -159,7 +160,7 @@ PlaylistDirectory.prototype._getEntryContextOptions = function() {
 //Unfortunately, we just have to rebuild this whole function w/ copy/paste
 PlaylistDirectory.prototype._preparePlaylistData = function(playlist) {
     if ( playlist.playing ) this._playingPlaylists.push(playlist);
-	
+
     // Playlist configuration
     const p = playlist.toObject(false);
     p.modeTooltip = this._getModeTooltip(p.mode);
@@ -286,20 +287,20 @@ Hooks.once("init", function (){
 Hooks.once("ready", async function () {
 	//Register our socket callback & default handlers.
 	SocketHandler.init();
-	
+
 	//Enable local sound controls if configured so.
 	//Disabled for now.
 	//LocalSound._init()
-	
+
 	Hooks.on("updatePlaylist", function(playlist, change, info, userId){
 		if('permission' in change) ui["playlists"].render(true);
 	});
-	
+
 
 	//We're going to change templates for generating the HTML for the playlist directory
 	let playlist_dir_template_path = "templates/sidebar/playlists-directory.html"
 	game.socket.emit("template", playlist_dir_template_path, resp => {
-		if ( resp.error ) new Error(resp.error);
+		if ( resp.error ) console.error(resp.error);
 
 		let html = resp.html.replace("@root.user.isGM", "sound.canControl");
 
@@ -309,9 +310,9 @@ Hooks.once("ready", async function () {
 		ui["playlists"].render(true)
      	});
 
-	let playlist_partial_template_path = "templates/sidebar/playlist-partial.html"
+	let playlist_partial_template_path = "templates/sidebar/partials/playlist-partial.html"
 	game.socket.emit("template", playlist_partial_template_path, resp => {
-		if ( resp.error ) new Error(resp.error);
+		if ( resp.error ) console.error(resp.error);
 
 		let html = resp.html.replace("#if @root.user.isGM", "#if this.canEdit");
 		html = html.replace("#unless @root.user.isGM", "#unless this.canControl");
